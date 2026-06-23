@@ -1,0 +1,23 @@
+[package]
+name = "talos"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.83"
+
+[lib]
+name = "talos"
+path = "core/lib.rs"
+
+[[bin]]
+name = "edge_node"
+path = "edge_node/main.rs"
+
+[dependencies]
+cxx = "=1.0.128"
+# Compatibility pins for Rust/Cargo 1.83 transitive cxx tooling.
+clap = "=4.5.23"
+indexmap = "=2.7.1"
+tokio = { version = "1.48", features = ["macros", "rt-multi-thread", "sync", "time"] }
+
+[build-dependencies]
+cxx-build = "=1.0.128"

@@ -1,0 +1,6 @@
+queue_pressure_threshold: 20
+thermal_throttle_c: 80.0
+degraded_memory_percent: 85.0
+vlm_memory_gate_percent: 75.0
+vlm_temperature_gate_c: 75.0
+telemetry_period_ms: 100
