@@ -16,10 +16,12 @@ pub enum TaskPriority {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct TaskRequest {
+    pub task_id: u64,
     pub task_type: TaskType,
     pub priority: TaskPriority,
     pub memory_estimate_mb: u64,
     pub deadline_ms: u64,
+    pub pool_slot_id: usize,
     pub frame: Vec<u8>,
 }
 

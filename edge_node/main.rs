@@ -1,10 +1,13 @@
 use std::path::PathBuf;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
+use std::time::Instant;
 
 use talos::executor::dispatch_to_cpp;
 use talos::{
-    AdmissionController, DecisionStatus, GpuLeaseManager, MockFrameIngestor, SchedulerState,
-    StateMachine, SyntheticTelemetryMonitor, SystemTelemetry, TaskRequest, TaskScheduler,
+    default_csv_path, default_jsonl_path, AdmissionController, DecisionStatus, GpuLeaseManager,
+    MockFrameIngestor, ObservabilityLogger, ObservationStage, SchedulerState, StateMachine,
+    SyntheticTelemetryMonitor, SystemTelemetry, TaskObservation, TaskRequest, TaskScheduler,
 };
 use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
@@ -13,17 +16,21 @@ use tokio::task::JoinHandle;
 struct Args {
     demo_dtu: PathBuf,
     max_tasks: usize,
+    log_jsonl: PathBuf,
+    log_csv: Option<PathBuf>,
 }
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args = parse_args()?;
-    run_dtu_demo(args.demo_dtu, args.max_tasks).await
+    run_dtu_demo(args.demo_dtu, args.max_tasks, args.log_jsonl, args.log_csv).await
 }
 
 fn parse_args() -> Result<Args, Box<dyn std::error::Error>> {
     let mut demo_dtu = PathBuf::from("data/dtu_wind_turbine");
     let mut max_tasks = 3usize;
+    let mut log_jsonl = default_jsonl_path();
+    let mut log_csv = Some(default_csv_path());
     let mut args = std::env::args().skip(1);
 
     while let Some(arg) = args.next() {
@@ -36,8 +43,21 @@ fn parse_args() -> Result<Args, Box<dyn std::error::Error>> {
                 let value = args.next().ok_or("--max-tasks requires a value")?;
                 max_tasks = value.parse()?;
             }
+            "--log-jsonl" => {
+                let value = args.next().ok_or("--log-jsonl requires a path")?;
+                log_jsonl = PathBuf::from(value);
+            }
+            "--log-csv" => {
+                let value = args.next().ok_or("--log-csv requires a path")?;
+                log_csv = Some(PathBuf::from(value));
+            }
+            "--no-csv" => {
+                log_csv = None;
+            }
             "--help" | "-h" => {
-                println!("Usage: edge_node [--demo-dtu PATH] [--max-tasks N]");
+                println!(
+                    "Usage: edge_node [--demo-dtu PATH] [--max-tasks N] [--log-jsonl PATH] [--log-csv PATH] [--no-csv]"
+                );
                 std::process::exit(0);
             }
             other => return Err(format!("unknown argument: {other}").into()),
@@ -47,12 +67,16 @@ fn parse_args() -> Result<Args, Box<dyn std::error::Error>> {
     Ok(Args {
         demo_dtu,
         max_tasks,
+        log_jsonl,
+        log_csv,
     })
 }
 
 async fn run_dtu_demo(
     dataset_path: PathBuf,
     max_tasks: usize,
+    log_jsonl: PathBuf,
+    log_csv: Option<PathBuf>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let mut ingestor = MockFrameIngestor::new(&dataset_path)?;
     if ingestor.is_empty() {
@@ -81,6 +105,10 @@ async fn run_dtu_demo(
     let admission = AdmissionController::default();
     let state_machine = StateMachine::default();
     let lease_manager = GpuLeaseManager::new();
+    let logger = Arc::new(Mutex::new(ObservabilityLogger::new(
+        &log_jsonl,
+        log_csv.as_ref(),
+    )?));
     let mut scheduler = TaskScheduler::new();
     let mut telemetry_monitor = SyntheticTelemetryMonitor::new_10hz();
     let mut current_telemetry = SystemTelemetry::nominal();
@@ -100,6 +128,7 @@ async fn run_dtu_demo(
                             &mut scheduler,
                             current_telemetry,
                             current_state,
+                            Arc::clone(&logger),
                         ) {
                             handles.push(handle);
                         }
@@ -120,6 +149,7 @@ async fn run_dtu_demo(
                             &mut scheduler,
                             current_telemetry,
                             current_state,
+                            Arc::clone(&logger),
                         ) {
                             handles.push(handle);
                         }
@@ -147,7 +177,9 @@ fn evaluate_and_dispatch(
     scheduler: &mut TaskScheduler,
     telemetry: SystemTelemetry,
     state: SchedulerState,
+    logger: Arc<Mutex<ObservabilityLogger>>,
 ) -> Option<JoinHandle<()>> {
+    let queue_pressure = scheduler.queue_pressure();
     let decision = admission.decide(
         &task,
         &telemetry,
@@ -160,30 +192,87 @@ fn evaluate_and_dispatch(
         DecisionStatus::ADMIT => {
             if let Some(lease) = lease_manager.try_acquire() {
                 let lease_id = lease.id;
+                let task_type = task.task_type;
+                let task_id = task.task_id;
+                let pool_slot_id = task.pool_slot_id;
                 Some(tokio::spawn(async move {
                     let _lease = lease;
+                    let started = Instant::now();
                     match dispatch_to_cpp(task).await {
                         Ok(result) => {
+                            let execution_time_ms = elapsed_execution_ms(started);
+                            record_observation(
+                                &logger,
+                                TaskObservation {
+                                    stage: ObservationStage::Execution,
+                                    task_id,
+                                    task_type,
+                                    decision: DecisionStatus::ADMIT,
+                                    queue_pressure,
+                                    scheduler_state: state,
+                                    lease_id: Some(lease_id.to_string()),
+                                    pool_slot_id,
+                                    latency_ms: Some(result.latency_ms),
+                                    execution_time_ms,
+                                },
+                            );
                             println!(
                                 "lease={lease_id} runtime_ok={} latency_ms={}",
                                 result.ok, result.latency_ms
                             );
                         }
                         Err(error) => {
+                            let execution_time_ms = elapsed_execution_ms(started);
+                            record_observation(
+                                &logger,
+                                TaskObservation {
+                                    stage: ObservationStage::Execution,
+                                    task_id,
+                                    task_type,
+                                    decision: DecisionStatus::ADMIT,
+                                    queue_pressure,
+                                    scheduler_state: state,
+                                    lease_id: Some(lease_id.to_string()),
+                                    pool_slot_id,
+                                    latency_ms: None,
+                                    execution_time_ms,
+                                },
+                            );
                             eprintln!("lease={lease_id} execution join error: {error}");
                         }
                     }
                 }))
             } else {
+                record_decision_observation(
+                    &logger,
+                    &task,
+                    DecisionStatus::DEFER,
+                    queue_pressure,
+                    state,
+                );
                 scheduler.defer(task);
                 None
             }
         }
         DecisionStatus::DEFER => {
+            record_decision_observation(
+                &logger,
+                &task,
+                DecisionStatus::DEFER,
+                queue_pressure,
+                state,
+            );
             scheduler.defer(task);
             None
         }
         DecisionStatus::REJECT => {
+            record_decision_observation(
+                &logger,
+                &task,
+                DecisionStatus::REJECT,
+                queue_pressure,
+                state,
+            );
             println!(
                 "rejected task_type={:?} priority={:?} state={:?}",
                 task.task_type, task.priority, state
@@ -191,4 +280,43 @@ fn evaluate_and_dispatch(
             None
         }
     }
+}
+
+fn record_decision_observation(
+    logger: &Arc<Mutex<ObservabilityLogger>>,
+    task: &TaskRequest,
+    decision: DecisionStatus,
+    queue_pressure: u32,
+    state: SchedulerState,
+) {
+    record_observation(
+        logger,
+        TaskObservation {
+            stage: ObservationStage::Decision,
+            task_id: task.task_id,
+            task_type: task.task_type,
+            decision,
+            queue_pressure,
+            scheduler_state: state,
+            lease_id: None,
+            pool_slot_id: task.pool_slot_id,
+            latency_ms: None,
+            execution_time_ms: 0,
+        },
+    );
+}
+
+fn record_observation(logger: &Arc<Mutex<ObservabilityLogger>>, observation: TaskObservation) {
+    if let Err(error) = logger
+        .lock()
+        .expect("observability logger mutex poisoned")
+        .record(&observation)
+    {
+        eprintln!("observability write error: {error}");
+    }
+}
+
+fn elapsed_execution_ms(started: Instant) -> u64 {
+    let millis = started.elapsed().as_millis() as u64;
+    millis.max(1)
 }

@@ -62,10 +62,12 @@ mod tests {
 
     fn task(priority: TaskPriority) -> TaskRequest {
         TaskRequest {
+            task_id: 1,
             task_type: TaskType::CV_FEATURES,
             priority,
             memory_estimate_mb: 1,
             deadline_ms: 100,
+            pool_slot_id: 0,
             frame: vec![1],
         }
     }

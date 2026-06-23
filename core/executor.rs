@@ -15,10 +15,12 @@ mod tests {
     #[tokio::test]
     async fn ffi_accepts_rust_buffer_and_returns_result() {
         let task = TaskRequest {
+            task_id: 1,
             task_type: TaskType::CV_FEATURES,
             priority: TaskPriority::MEDIUM,
             memory_estimate_mb: 1,
             deadline_ms: 100,
+            pool_slot_id: 0,
             frame: vec![1, 2, 3, 4],
         };
         let result = dispatch_to_cpp(task)

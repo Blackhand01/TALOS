@@ -5,21 +5,29 @@ use std::path::{Path, PathBuf};
 use crate::types::{TaskPriority, TaskRequest, TaskType};
 
 pub const DEFAULT_PHASE1_DEADLINE_MS: u64 = 250;
+pub const DEFAULT_POOL_SLOT_COUNT: usize = 5;
 
 #[derive(Debug)]
 pub struct MockFrameIngestor {
     files: Vec<PathBuf>,
     next_index: usize,
+    pool_slot_count: usize,
 }
 
 impl MockFrameIngestor {
     pub fn new(root: impl AsRef<Path>) -> io::Result<Self> {
+        Self::new_with_pool_slots(root, DEFAULT_POOL_SLOT_COUNT)
+    }
+
+    pub fn new_with_pool_slots(root: impl AsRef<Path>, pool_slot_count: usize) -> io::Result<Self> {
+        assert!(pool_slot_count > 0, "pool_slot_count must be positive");
         let mut files = Vec::new();
         discover_jpg_files(root.as_ref(), &mut files)?;
         files.sort();
         Ok(Self {
             files,
             next_index: 0,
+            pool_slot_count,
         })
     }
 
@@ -37,15 +45,19 @@ impl MockFrameIngestor {
         }
 
         let path = &self.files[self.next_index % self.files.len()];
+        let task_id = self.next_index as u64 + 1;
+        let pool_slot_id = self.next_index % self.pool_slot_count;
         self.next_index += 1;
         let frame = fs::read(path)?;
         let memory_estimate_mb = bytes_to_estimated_mb(frame.len());
 
         Ok(Some(TaskRequest {
+            task_id,
             task_type: TaskType::CV_FEATURES,
             priority: TaskPriority::MEDIUM,
             memory_estimate_mb,
             deadline_ms: DEFAULT_PHASE1_DEADLINE_MS,
+            pool_slot_id,
             frame,
         }))
     }
@@ -100,6 +112,8 @@ mod tests {
 
         assert_eq!(task.task_type, TaskType::CV_FEATURES);
         assert_eq!(task.priority, TaskPriority::MEDIUM);
+        assert_eq!(task.task_id, 1);
+        assert_eq!(task.pool_slot_id, 0);
         assert!(task.memory_estimate_mb >= 1);
         assert_eq!(task.deadline_ms, DEFAULT_PHASE1_DEADLINE_MS);
         assert!(!task.frame.is_empty());

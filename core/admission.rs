@@ -100,10 +100,12 @@ mod tests {
 
     fn task(task_type: TaskType, priority: TaskPriority) -> TaskRequest {
         TaskRequest {
+            task_id: 1,
             task_type,
             priority,
             memory_estimate_mb: 1,
             deadline_ms: 100,
+            pool_slot_id: 0,
             frame: vec![1, 2, 3],
         }
     }

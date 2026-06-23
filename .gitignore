@@ -317,4 +317,6 @@ target
 blueprint.md
 dtu_wind_turbine
 data/.DS_Store
-
+logs/
+.DS_Store
+data/dataset.md

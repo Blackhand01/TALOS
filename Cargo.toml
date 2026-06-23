@@ -12,6 +12,10 @@ path = "core/lib.rs"
 name = "edge_node"
 path = "edge_node/main.rs"
 
+[[bin]]
+name = "talos_bench"
+path = "evaluation/benchmarks.rs"
+
 [dependencies]
 cxx = "=1.0.128"
 # Compatibility pins for Rust/Cargo 1.83 transitive cxx tooling.
