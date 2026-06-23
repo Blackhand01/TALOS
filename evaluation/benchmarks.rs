@@ -138,6 +138,13 @@ async fn run_benchmark(args: Args) -> Result<(), Box<dyn std::error::Error>> {
                         pool_slot_id,
                         latency_ms: Some(result.latency_ms),
                         execution_time_ms,
+                        runtime_ok: Some(result.ok),
+                        feature_dim: Some(result.feature_dim),
+                        input_bytes: Some(result.input_bytes),
+                        feature_checksum: Some(result.checksum),
+                        feature_mean: Some(result.mean),
+                        feature_entropy: Some(result.entropy),
+                        feature_edge_density: Some(result.edge_density),
                     })?;
                 } else {
                     stats.deferred += 1;
@@ -201,6 +208,13 @@ fn record_decision(
         pool_slot_id: task.pool_slot_id,
         latency_ms: None,
         execution_time_ms: 0,
+        runtime_ok: None,
+        feature_dim: None,
+        input_bytes: None,
+        feature_checksum: None,
+        feature_mean: None,
+        feature_entropy: None,
+        feature_edge_density: None,
     })
 }
 

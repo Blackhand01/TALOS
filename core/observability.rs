@@ -23,6 +23,13 @@ pub struct TaskObservation {
     pub pool_slot_id: usize,
     pub latency_ms: Option<u64>,
     pub execution_time_ms: u64,
+    pub runtime_ok: Option<bool>,
+    pub feature_dim: Option<u32>,
+    pub input_bytes: Option<u64>,
+    pub feature_checksum: Option<u64>,
+    pub feature_mean: Option<f32>,
+    pub feature_entropy: Option<f32>,
+    pub feature_edge_density: Option<f32>,
 }
 
 #[derive(Debug)]
@@ -49,7 +56,7 @@ impl ObservabilityLogger {
                 if is_empty {
                     writeln!(
                         writer,
-                        "timestamp_ms,trace_id,stage,task_id,task_type,decision,queue_pressure,scheduler_state,lease_id,pool_slot_id,latency_ms,execution_time_ms"
+                        "timestamp_ms,trace_id,stage,task_id,task_type,decision,queue_pressure,scheduler_state,lease_id,pool_slot_id,latency_ms,execution_time_ms,runtime_ok,feature_dim,input_bytes,feature_checksum,feature_mean,feature_entropy,feature_edge_density"
                     )?;
                 }
                 Some(writer)
@@ -81,7 +88,7 @@ impl TaskObservation {
 
     fn to_json_line(&self, timestamp_ms: u128) -> String {
         format!(
-            "{{\"timestamp_ms\":{},\"trace_id\":\"{}\",\"stage\":\"{}\",\"task_id\":{},\"task_type\":\"{}\",\"decision\":\"{}\",\"queue_pressure\":{},\"scheduler_state\":\"{}\",\"lease_id\":{},\"pool_slot_id\":{},\"latency_ms\":{},\"execution_time_ms\":{}}}",
+            "{{\"timestamp_ms\":{},\"trace_id\":\"{}\",\"stage\":\"{}\",\"task_id\":{},\"task_type\":\"{}\",\"decision\":\"{}\",\"queue_pressure\":{},\"scheduler_state\":\"{}\",\"lease_id\":{},\"pool_slot_id\":{},\"latency_ms\":{},\"execution_time_ms\":{},\"runtime_ok\":{},\"feature_dim\":{},\"input_bytes\":{},\"feature_checksum\":{},\"feature_mean\":{},\"feature_entropy\":{},\"feature_edge_density\":{}}}",
             timestamp_ms,
             self.trace_id(),
             stage_name(&self.stage),
@@ -93,13 +100,20 @@ impl TaskObservation {
             optional_json_string(self.lease_id.as_deref()),
             self.pool_slot_id,
             optional_json_u64(self.latency_ms),
-            self.execution_time_ms
+            self.execution_time_ms,
+            optional_json_bool(self.runtime_ok),
+            optional_json_u32(self.feature_dim),
+            optional_json_u64(self.input_bytes),
+            optional_json_u64(self.feature_checksum),
+            optional_json_f32(self.feature_mean),
+            optional_json_f32(self.feature_entropy),
+            optional_json_f32(self.feature_edge_density)
         )
     }
 
     fn to_csv_line(&self, timestamp_ms: u128) -> String {
         format!(
-            "{},{},{},{},{},{},{},{},{},{},{},{}",
+            "{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{}",
             timestamp_ms,
             self.trace_id(),
             stage_name(&self.stage),
@@ -113,7 +127,28 @@ impl TaskObservation {
             self.latency_ms
                 .map(|value| value.to_string())
                 .unwrap_or_default(),
-            self.execution_time_ms
+            self.execution_time_ms,
+            self.runtime_ok
+                .map(|value| value.to_string())
+                .unwrap_or_default(),
+            self.feature_dim
+                .map(|value| value.to_string())
+                .unwrap_or_default(),
+            self.input_bytes
+                .map(|value| value.to_string())
+                .unwrap_or_default(),
+            self.feature_checksum
+                .map(|value| value.to_string())
+                .unwrap_or_default(),
+            self.feature_mean
+                .map(|value| format!("{value:.6}"))
+                .unwrap_or_default(),
+            self.feature_entropy
+                .map(|value| format!("{value:.6}"))
+                .unwrap_or_default(),
+            self.feature_edge_density
+                .map(|value| format!("{value:.6}"))
+                .unwrap_or_default()
         )
     }
 }
@@ -145,6 +180,24 @@ fn optional_json_string(value: Option<&str>) -> String {
 fn optional_json_u64(value: Option<u64>) -> String {
     value
         .map(|value| value.to_string())
+        .unwrap_or_else(|| "null".to_string())
+}
+
+fn optional_json_u32(value: Option<u32>) -> String {
+    value
+        .map(|value| value.to_string())
+        .unwrap_or_else(|| "null".to_string())
+}
+
+fn optional_json_bool(value: Option<bool>) -> String {
+    value
+        .map(|value| value.to_string())
+        .unwrap_or_else(|| "null".to_string())
+}
+
+fn optional_json_f32(value: Option<f32>) -> String {
+    value
+        .map(|value| format!("{value:.6}"))
         .unwrap_or_else(|| "null".to_string())
 }
 
@@ -218,6 +271,13 @@ mod tests {
                 pool_slot_id: 2,
                 latency_ms: Some(3),
                 execution_time_ms: 4,
+                runtime_ok: Some(true),
+                feature_dim: Some(7),
+                input_bytes: Some(4),
+                feature_checksum: Some(123),
+                feature_mean: Some(0.5),
+                feature_entropy: Some(2.0),
+                feature_edge_density: Some(0.25),
             })
             .expect("observation should write");
 
@@ -226,6 +286,9 @@ mod tests {
         assert!(json.contains("\"task_type\":\"CV_FEATURES\""));
         assert!(json.contains("\"lease_id\":\"0001\""));
         assert!(json.contains("\"pool_slot_id\":2"));
+        assert!(json.contains("\"feature_dim\":7"));
+        assert!(json.contains("\"feature_checksum\":123"));
+        assert!(json.contains("\"runtime_ok\":true"));
 
         let csv_content = fs::read_to_string(&csv).expect("csv should be readable");
         assert!(csv_content.contains("timestamp_ms,trace_id,stage"));
