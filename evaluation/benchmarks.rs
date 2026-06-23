@@ -3,9 +3,10 @@ use std::time::{Duration, Instant};
 
 use talos::executor::dispatch_to_cpp;
 use talos::{
-    default_csv_path, default_jsonl_path, AdmissionController, DecisionStatus, GpuLeaseManager,
-    ObservabilityLogger, ObservationStage, SchedulerState, StateMachine, SystemTelemetry,
-    TaskObservation, TaskPriority, TaskRequest, TaskScheduler, TaskType,
+    default_csv_path, default_jsonl_path, AdmissionController, ChangeDetector, DecisionStatus,
+    FeatureEmbedding, GpuLeaseManager, ObservabilityLogger, ObservationStage, SchedulerState,
+    StateMachine, SystemTelemetry, TaskObservation, TaskPriority, TaskRequest, TaskScheduler,
+    TaskType, TelemetrySource,
 };
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -14,6 +15,7 @@ enum StressMode {
     VlmBurst,
     ThermalSpike,
     MixedContention,
+    ChangeDetection,
 }
 
 #[derive(Debug)]
@@ -30,6 +32,7 @@ struct BenchStats {
     deferred: usize,
     rejected: usize,
     executed: usize,
+    changes_detected: usize,
     execution_times_ms: Vec<u64>,
     runtime_latencies_ms: Vec<u64>,
 }
@@ -72,7 +75,7 @@ fn parse_args() -> Result<Args, Box<dyn std::error::Error>> {
             }
             "--help" | "-h" => {
                 println!(
-                    "Usage: talos_bench [--mode cv-flood|vlm-burst|thermal-spike|mixed-contention] [--tasks N] [--log-jsonl PATH] [--log-csv PATH] [--no-csv]"
+                    "Usage: talos_bench [--mode cv-flood|vlm-burst|thermal-spike|mixed-contention|change-detection] [--tasks N] [--log-jsonl PATH] [--log-csv PATH] [--no-csv]"
                 );
                 std::process::exit(0);
             }
@@ -92,6 +95,7 @@ async fn run_benchmark(args: Args) -> Result<(), Box<dyn std::error::Error>> {
     let admission = AdmissionController::default();
     let state_machine = StateMachine::default();
     let lease_manager = GpuLeaseManager::new();
+    let mut change_detector = ChangeDetector::default();
     let mut scheduler = TaskScheduler::new();
     let mut logger = ObservabilityLogger::new(&args.log_jsonl, args.log_csv.as_ref())?;
     let mut stats = BenchStats::default();
@@ -123,6 +127,14 @@ async fn run_benchmark(args: Args) -> Result<(), Box<dyn std::error::Error>> {
                         let _lease = lease;
                         dispatch_to_cpp(task).await?
                     };
+                    let change_result = if task_type == TaskType::CHANGE_DETECTION && result.ok {
+                        Some(change_detector.evaluate(FeatureEmbedding::from(&result)))
+                    } else {
+                        None
+                    };
+                    if change_result.map(|result| result.changed).unwrap_or(false) {
+                        stats.changes_detected += 1;
+                    }
                     let execution_time_ms = elapsed_execution_ms(execution_started);
                     stats.executed += 1;
                     stats.execution_times_ms.push(execution_time_ms);
@@ -134,6 +146,11 @@ async fn run_benchmark(args: Args) -> Result<(), Box<dyn std::error::Error>> {
                         decision: DecisionStatus::ADMIT,
                         queue_pressure,
                         scheduler_state: state,
+                        telemetry_source: TelemetrySource::Synthetic,
+                        telemetry_valid: true,
+                        memory_usage_percent: telemetry.memory_usage_percent,
+                        temperature_c: telemetry.temperature_c,
+                        gpu_utilization: telemetry.gpu_utilization,
                         lease_id: Some(lease_id),
                         pool_slot_id,
                         latency_ms: Some(result.latency_ms),
@@ -145,6 +162,9 @@ async fn run_benchmark(args: Args) -> Result<(), Box<dyn std::error::Error>> {
                         feature_mean: Some(result.mean),
                         feature_entropy: Some(result.entropy),
                         feature_edge_density: Some(result.edge_density),
+                        change_baseline_ready: change_result.map(|result| result.baseline_ready),
+                        change_score: change_result.map(|result| result.score),
+                        change_detected: change_result.map(|result| result.changed),
                     })?;
                 } else {
                     stats.deferred += 1;
@@ -153,6 +173,7 @@ async fn run_benchmark(args: Args) -> Result<(), Box<dyn std::error::Error>> {
                         &task,
                         DecisionStatus::DEFER,
                         queue_pressure,
+                        telemetry,
                         state,
                     )?;
                     scheduler.defer(task);
@@ -165,6 +186,7 @@ async fn run_benchmark(args: Args) -> Result<(), Box<dyn std::error::Error>> {
                     &task,
                     DecisionStatus::DEFER,
                     queue_pressure,
+                    telemetry,
                     state,
                 )?;
                 scheduler.defer(task);
@@ -176,6 +198,7 @@ async fn run_benchmark(args: Args) -> Result<(), Box<dyn std::error::Error>> {
                     &task,
                     DecisionStatus::REJECT,
                     queue_pressure,
+                    telemetry,
                     state,
                 )?;
             }
@@ -195,6 +218,7 @@ fn record_decision(
     task: &TaskRequest,
     decision: DecisionStatus,
     queue_pressure: u32,
+    telemetry: SystemTelemetry,
     state: SchedulerState,
 ) -> std::io::Result<()> {
     logger.record(&TaskObservation {
@@ -204,6 +228,11 @@ fn record_decision(
         decision,
         queue_pressure,
         scheduler_state: state,
+        telemetry_source: TelemetrySource::Synthetic,
+        telemetry_valid: true,
+        memory_usage_percent: telemetry.memory_usage_percent,
+        temperature_c: telemetry.temperature_c,
+        gpu_utilization: telemetry.gpu_utilization,
         lease_id: None,
         pool_slot_id: task.pool_slot_id,
         latency_ms: None,
@@ -215,6 +244,9 @@ fn record_decision(
         feature_mean: None,
         feature_entropy: None,
         feature_edge_density: None,
+        change_baseline_ready: None,
+        change_score: None,
+        change_detected: None,
     })
 }
 
@@ -241,6 +273,12 @@ fn synthetic_task(mode: StressMode, index: usize) -> TaskRequest {
             2 => (TaskType::VLM_QUERY, TaskPriority::LOW, 1_024),
             _ => (TaskType::CV_FEATURES, TaskPriority::LOW, 32),
         },
+        StressMode::ChangeDetection => (TaskType::CHANGE_DETECTION, TaskPriority::MEDIUM, 64),
+    };
+
+    let frame = match mode {
+        StressMode::ChangeDetection => synthetic_change_frame(index),
+        _ => vec![1; 1024],
     };
 
     TaskRequest {
@@ -250,7 +288,7 @@ fn synthetic_task(mode: StressMode, index: usize) -> TaskRequest {
         memory_estimate_mb,
         deadline_ms: 250,
         pool_slot_id: index % 5,
-        frame: vec![1; 1024],
+        frame,
     }
 }
 
@@ -288,7 +326,19 @@ fn synthetic_telemetry(mode: StressMode, index: usize, tasks: usize) -> SystemTe
                 gpu_utilization: 70.0,
             }
         }
+        StressMode::ChangeDetection => SystemTelemetry::nominal(),
     }
+}
+
+fn synthetic_change_frame(index: usize) -> Vec<u8> {
+    let value = if index < 2 {
+        16
+    } else if index % 3 == 0 {
+        220
+    } else {
+        32
+    };
+    vec![value; 1024]
 }
 
 fn deterministic_bucket(index: usize) -> usize {
@@ -301,6 +351,7 @@ fn mode_delay(mode: StressMode) -> Option<Duration> {
         StressMode::VlmBurst => Some(Duration::from_millis(100)),
         StressMode::ThermalSpike => Some(Duration::from_millis(50)),
         StressMode::MixedContention => Some(Duration::from_millis(25)),
+        StressMode::ChangeDetection => Some(Duration::from_millis(40)),
     }
 }
 
@@ -310,6 +361,7 @@ fn parse_mode(value: &str) -> Result<StressMode, Box<dyn std::error::Error>> {
         "vlm-burst" => Ok(StressMode::VlmBurst),
         "thermal-spike" => Ok(StressMode::ThermalSpike),
         "mixed-contention" => Ok(StressMode::MixedContention),
+        "change-detection" => Ok(StressMode::ChangeDetection),
         other => Err(format!("unknown mode: {other}").into()),
     }
 }
@@ -320,6 +372,7 @@ fn mode_name(mode: StressMode) -> &'static str {
         StressMode::VlmBurst => "vlm-burst",
         StressMode::ThermalSpike => "thermal-spike",
         StressMode::MixedContention => "mixed-contention",
+        StressMode::ChangeDetection => "change-detection",
     }
 }
 
@@ -328,8 +381,8 @@ fn print_summary(mode: StressMode, tasks: usize, elapsed: Duration, stats: &Benc
     println!("tasks={tasks}");
     println!("elapsed_ms={}", elapsed.as_millis());
     println!(
-        "admitted={} deferred={} rejected={} executed={}",
-        stats.admitted, stats.deferred, stats.rejected, stats.executed
+        "admitted={} deferred={} rejected={} executed={} changes_detected={}",
+        stats.admitted, stats.deferred, stats.rejected, stats.executed, stats.changes_detected
     );
     println!(
         "execution_time_ms_p50={} execution_time_ms_p95={}",

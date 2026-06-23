@@ -5,9 +5,10 @@ use std::time::Instant;
 
 use talos::executor::dispatch_to_cpp;
 use talos::{
-    default_csv_path, default_jsonl_path, AdmissionController, DecisionStatus, GpuLeaseManager,
-    MockFrameIngestor, ObservabilityLogger, ObservationStage, SchedulerState, StateMachine,
-    SyntheticTelemetryMonitor, SystemTelemetry, TaskObservation, TaskRequest, TaskScheduler,
+    default_csv_path, default_jsonl_path, AdmissionController, ChangeDetector, DecisionStatus,
+    FeatureEmbedding, GpuLeaseManager, MockFrameIngestor, ObservabilityLogger, ObservationStage,
+    SchedulerState, StateMachine, SystemTelemetry, TaskObservation, TaskRequest, TaskScheduler,
+    TaskType, TelemetryMonitor, TelemetrySource,
 };
 use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
@@ -18,12 +19,29 @@ struct Args {
     max_tasks: usize,
     log_jsonl: PathBuf,
     log_csv: Option<PathBuf>,
+    telemetry_source: TelemetrySource,
+    workload: WorkloadMode,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum WorkloadMode {
+    Cv,
+    ChangeDetection,
+    Alternating,
 }
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args = parse_args()?;
-    run_dtu_demo(args.demo_dtu, args.max_tasks, args.log_jsonl, args.log_csv).await
+    run_dtu_demo(
+        args.demo_dtu,
+        args.max_tasks,
+        args.log_jsonl,
+        args.log_csv,
+        args.telemetry_source,
+        args.workload,
+    )
+    .await
 }
 
 fn parse_args() -> Result<Args, Box<dyn std::error::Error>> {
@@ -31,6 +49,8 @@ fn parse_args() -> Result<Args, Box<dyn std::error::Error>> {
     let mut max_tasks = 3usize;
     let mut log_jsonl = default_jsonl_path();
     let mut log_csv = Some(default_csv_path());
+    let mut telemetry_source = TelemetrySource::Synthetic;
+    let mut workload = WorkloadMode::Cv;
     let mut args = std::env::args().skip(1);
 
     while let Some(arg) = args.next() {
@@ -54,9 +74,19 @@ fn parse_args() -> Result<Args, Box<dyn std::error::Error>> {
             "--no-csv" => {
                 log_csv = None;
             }
+            "--telemetry" => {
+                let value = args.next().ok_or("--telemetry requires a source")?;
+                telemetry_source = TelemetrySource::parse(&value)
+                    .ok_or("telemetry source must be synthetic, tegrastats, or jtop")?;
+            }
+            "--workload" => {
+                let value = args.next().ok_or("--workload requires a mode")?;
+                workload = parse_workload_mode(&value)
+                    .ok_or("workload must be cv, change-detection, or alternating")?;
+            }
             "--help" | "-h" => {
                 println!(
-                    "Usage: edge_node [--demo-dtu PATH] [--max-tasks N] [--log-jsonl PATH] [--log-csv PATH] [--no-csv]"
+                    "Usage: edge_node [--demo-dtu PATH] [--max-tasks N] [--log-jsonl PATH] [--log-csv PATH] [--no-csv] [--telemetry synthetic|tegrastats|jtop] [--workload cv|change-detection|alternating]"
                 );
                 std::process::exit(0);
             }
@@ -69,6 +99,8 @@ fn parse_args() -> Result<Args, Box<dyn std::error::Error>> {
         max_tasks,
         log_jsonl,
         log_csv,
+        telemetry_source,
+        workload,
     })
 }
 
@@ -77,6 +109,8 @@ async fn run_dtu_demo(
     max_tasks: usize,
     log_jsonl: PathBuf,
     log_csv: Option<PathBuf>,
+    telemetry_source: TelemetrySource,
+    workload: WorkloadMode,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let mut ingestor = MockFrameIngestor::new(&dataset_path)?;
     if ingestor.is_empty() {
@@ -87,7 +121,8 @@ async fn run_dtu_demo(
     tokio::spawn(async move {
         for _ in 0..max_tasks {
             match ingestor.read_next_task() {
-                Ok(Some(task)) => {
+                Ok(Some(mut task)) => {
+                    task.task_type = workload_task_type(workload, task.task_id);
                     if task_tx.send(task).await.is_err() {
                         return;
                     }
@@ -105,13 +140,16 @@ async fn run_dtu_demo(
     let admission = AdmissionController::default();
     let state_machine = StateMachine::default();
     let lease_manager = GpuLeaseManager::new();
+    let change_detector = Arc::new(Mutex::new(ChangeDetector::default()));
     let logger = Arc::new(Mutex::new(ObservabilityLogger::new(
         &log_jsonl,
         log_csv.as_ref(),
     )?));
     let mut scheduler = TaskScheduler::new();
-    let mut telemetry_monitor = SyntheticTelemetryMonitor::new_10hz();
+    let mut telemetry_monitor = TelemetryMonitor::new(Duration::from_millis(100), telemetry_source);
     let mut current_telemetry = SystemTelemetry::nominal();
+    let mut current_telemetry_source = telemetry_source;
+    let mut current_telemetry_valid = telemetry_source == TelemetrySource::Synthetic;
     let mut current_state = SchedulerState::NORMAL;
     let mut producer_done = false;
     let mut handles: Vec<JoinHandle<()>> = Vec::new();
@@ -127,7 +165,10 @@ async fn run_dtu_demo(
                             &lease_manager,
                             &mut scheduler,
                             current_telemetry,
+                            current_telemetry_source,
+                            current_telemetry_valid,
                             current_state,
+                            Arc::clone(&change_detector),
                             Arc::clone(&logger),
                         ) {
                             handles.push(handle);
@@ -136,8 +177,16 @@ async fn run_dtu_demo(
                     None => producer_done = true,
                 }
             }
-            telemetry_update = telemetry_monitor.tick() => {
-                current_telemetry = telemetry_update;
+            telemetry_sample = telemetry_monitor.tick_sample() => {
+                current_telemetry = telemetry_sample.telemetry;
+                current_telemetry_source = telemetry_sample.source;
+                current_telemetry_valid = telemetry_sample.valid;
+                if !telemetry_sample.valid {
+                    eprintln!(
+                        "telemetry source={} unavailable; using last known sample",
+                        telemetry_sample.source.name()
+                    );
+                }
                 current_state = state_machine.evaluate(&current_telemetry, scheduler.queue_pressure());
 
                 if !lease_manager.is_active() {
@@ -148,7 +197,10 @@ async fn run_dtu_demo(
                             &lease_manager,
                             &mut scheduler,
                             current_telemetry,
+                            current_telemetry_source,
+                            current_telemetry_valid,
                             current_state,
+                            Arc::clone(&change_detector),
                             Arc::clone(&logger),
                         ) {
                             handles.push(handle);
@@ -176,7 +228,10 @@ fn evaluate_and_dispatch(
     lease_manager: &GpuLeaseManager,
     scheduler: &mut TaskScheduler,
     telemetry: SystemTelemetry,
+    telemetry_source: TelemetrySource,
+    telemetry_valid: bool,
     state: SchedulerState,
+    change_detector: Arc<Mutex<ChangeDetector>>,
     logger: Arc<Mutex<ObservabilityLogger>>,
 ) -> Option<JoinHandle<()>> {
     let queue_pressure = scheduler.queue_pressure();
@@ -201,6 +256,17 @@ fn evaluate_and_dispatch(
                     match dispatch_to_cpp(task).await {
                         Ok(result) => {
                             let execution_time_ms = elapsed_execution_ms(started);
+                            let change_result =
+                                if task_type == TaskType::CHANGE_DETECTION && result.ok {
+                                    Some(
+                                        change_detector
+                                            .lock()
+                                            .expect("change detector mutex poisoned")
+                                            .evaluate(FeatureEmbedding::from(&result)),
+                                    )
+                                } else {
+                                    None
+                                };
                             record_observation(
                                 &logger,
                                 TaskObservation {
@@ -210,6 +276,11 @@ fn evaluate_and_dispatch(
                                     decision: DecisionStatus::ADMIT,
                                     queue_pressure,
                                     scheduler_state: state,
+                                    telemetry_source,
+                                    telemetry_valid,
+                                    memory_usage_percent: telemetry.memory_usage_percent,
+                                    temperature_c: telemetry.temperature_c,
+                                    gpu_utilization: telemetry.gpu_utilization,
                                     lease_id: Some(lease_id.to_string()),
                                     pool_slot_id,
                                     latency_ms: Some(result.latency_ms),
@@ -221,11 +292,21 @@ fn evaluate_and_dispatch(
                                     feature_mean: Some(result.mean),
                                     feature_entropy: Some(result.entropy),
                                     feature_edge_density: Some(result.edge_density),
+                                    change_baseline_ready: change_result
+                                        .map(|result| result.baseline_ready),
+                                    change_score: change_result.map(|result| result.score),
+                                    change_detected: change_result.map(|result| result.changed),
                                 },
                             );
                             println!(
-                                "lease={lease_id} runtime_ok={} latency_ms={} feature_dim={} checksum={}",
-                                result.ok, result.latency_ms, result.feature_dim, result.checksum
+                                "lease={lease_id} runtime_ok={} latency_ms={} feature_dim={} checksum={} change_score={}",
+                                result.ok,
+                                result.latency_ms,
+                                result.feature_dim,
+                                result.checksum,
+                                change_result
+                                    .map(|result| format!("{:.4}", result.score))
+                                    .unwrap_or_else(|| "n/a".to_string())
                             );
                         }
                         Err(error) => {
@@ -239,6 +320,11 @@ fn evaluate_and_dispatch(
                                     decision: DecisionStatus::ADMIT,
                                     queue_pressure,
                                     scheduler_state: state,
+                                    telemetry_source,
+                                    telemetry_valid,
+                                    memory_usage_percent: telemetry.memory_usage_percent,
+                                    temperature_c: telemetry.temperature_c,
+                                    gpu_utilization: telemetry.gpu_utilization,
                                     lease_id: Some(lease_id.to_string()),
                                     pool_slot_id,
                                     latency_ms: None,
@@ -250,6 +336,9 @@ fn evaluate_and_dispatch(
                                     feature_mean: None,
                                     feature_entropy: None,
                                     feature_edge_density: None,
+                                    change_baseline_ready: None,
+                                    change_score: None,
+                                    change_detected: None,
                                 },
                             );
                             eprintln!("lease={lease_id} execution join error: {error}");
@@ -262,6 +351,9 @@ fn evaluate_and_dispatch(
                     &task,
                     DecisionStatus::DEFER,
                     queue_pressure,
+                    telemetry,
+                    telemetry_source,
+                    telemetry_valid,
                     state,
                 );
                 scheduler.defer(task);
@@ -274,6 +366,9 @@ fn evaluate_and_dispatch(
                 &task,
                 DecisionStatus::DEFER,
                 queue_pressure,
+                telemetry,
+                telemetry_source,
+                telemetry_valid,
                 state,
             );
             scheduler.defer(task);
@@ -285,6 +380,9 @@ fn evaluate_and_dispatch(
                 &task,
                 DecisionStatus::REJECT,
                 queue_pressure,
+                telemetry,
+                telemetry_source,
+                telemetry_valid,
                 state,
             );
             println!(
@@ -301,6 +399,9 @@ fn record_decision_observation(
     task: &TaskRequest,
     decision: DecisionStatus,
     queue_pressure: u32,
+    telemetry: SystemTelemetry,
+    telemetry_source: TelemetrySource,
+    telemetry_valid: bool,
     state: SchedulerState,
 ) {
     record_observation(
@@ -312,6 +413,11 @@ fn record_decision_observation(
             decision,
             queue_pressure,
             scheduler_state: state,
+            telemetry_source,
+            telemetry_valid,
+            memory_usage_percent: telemetry.memory_usage_percent,
+            temperature_c: telemetry.temperature_c,
+            gpu_utilization: telemetry.gpu_utilization,
             lease_id: None,
             pool_slot_id: task.pool_slot_id,
             latency_ms: None,
@@ -323,6 +429,9 @@ fn record_decision_observation(
             feature_mean: None,
             feature_entropy: None,
             feature_edge_density: None,
+            change_baseline_ready: None,
+            change_score: None,
+            change_detected: None,
         },
     );
 }
@@ -340,4 +449,27 @@ fn record_observation(logger: &Arc<Mutex<ObservabilityLogger>>, observation: Tas
 fn elapsed_execution_ms(started: Instant) -> u64 {
     let millis = started.elapsed().as_millis() as u64;
     millis.max(1)
+}
+
+fn parse_workload_mode(value: &str) -> Option<WorkloadMode> {
+    match value {
+        "cv" => Some(WorkloadMode::Cv),
+        "change-detection" => Some(WorkloadMode::ChangeDetection),
+        "alternating" => Some(WorkloadMode::Alternating),
+        _ => None,
+    }
+}
+
+fn workload_task_type(workload: WorkloadMode, task_id: u64) -> TaskType {
+    match workload {
+        WorkloadMode::Cv => TaskType::CV_FEATURES,
+        WorkloadMode::ChangeDetection => TaskType::CHANGE_DETECTION,
+        WorkloadMode::Alternating => {
+            if task_id % 2 == 0 {
+                TaskType::CHANGE_DETECTION
+            } else {
+                TaskType::CV_FEATURES
+            }
+        }
+    }
 }

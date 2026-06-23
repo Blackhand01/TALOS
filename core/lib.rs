@@ -1,4 +1,5 @@
 pub mod admission;
+pub mod change_detection;
 pub mod executor;
 pub mod ingestion;
 pub mod leases;
@@ -12,6 +13,9 @@ pub mod types;
 pub mod cxx_bridge;
 
 pub use admission::AdmissionController;
+pub use change_detection::{
+    ChangeDetectionResult, ChangeDetector, ChangeDetectorConfig, FeatureEmbedding,
+};
 pub use ingestion::MockFrameIngestor;
 pub use leases::{GpuLease, GpuLeaseManager};
 pub use observability::{
@@ -19,7 +23,10 @@ pub use observability::{
 };
 pub use scheduler::TaskScheduler;
 pub use state_machine::StateMachine;
-pub use telemetry::SyntheticTelemetryMonitor;
+pub use telemetry::{
+    JetsonTelemetryMonitor, SyntheticTelemetryMonitor, TelemetryMonitor, TelemetrySample,
+    TelemetrySource,
+};
 pub use types::{
     Decision, DecisionStatus, SchedulerState, SystemTelemetry, TaskPriority, TaskRequest, TaskType,
 };

@@ -4,11 +4,12 @@ use crate::cxx_bridge::ffi::{run_cv_features, RuntimeResult};
 use crate::types::{TaskRequest, TaskType};
 
 pub async fn dispatch_to_cpp(task: TaskRequest) -> Result<RuntimeResult, task::JoinError> {
-    if task.task_type != TaskType::CV_FEATURES {
-        return Ok(unsupported_runtime_result(task.frame.len() as u64));
+    match task.task_type {
+        TaskType::CV_FEATURES | TaskType::CHANGE_DETECTION => {
+            task::spawn_blocking(move || run_cv_features(&task.frame)).await
+        }
+        TaskType::VLM_QUERY => Ok(unsupported_runtime_result(task.frame.len() as u64)),
     }
-
-    task::spawn_blocking(move || run_cv_features(&task.frame)).await
 }
 
 const fn unsupported_runtime_result(input_bytes: u64) -> RuntimeResult {
@@ -56,9 +57,29 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn non_cv_workloads_do_not_enter_cv_runtime() {
+    async fn change_detection_reuses_cv_embedding_runtime() {
         let task = TaskRequest {
             task_id: 2,
+            task_type: TaskType::CHANGE_DETECTION,
+            priority: TaskPriority::MEDIUM,
+            memory_estimate_mb: 1,
+            deadline_ms: 100,
+            pool_slot_id: 0,
+            frame: vec![1, 2, 3, 4],
+        };
+
+        let result = dispatch_to_cpp(task)
+            .await
+            .expect("spawn_blocking should complete");
+        assert!(result.ok);
+        assert_eq!(result.feature_dim, 7);
+        assert_ne!(result.checksum, 0);
+    }
+
+    #[tokio::test]
+    async fn vlm_workloads_do_not_enter_cv_runtime() {
+        let task = TaskRequest {
+            task_id: 3,
             task_type: TaskType::VLM_QUERY,
             priority: TaskPriority::LOW,
             memory_estimate_mb: 1,

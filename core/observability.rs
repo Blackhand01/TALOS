@@ -3,6 +3,7 @@ use std::io::{self, BufWriter, Write};
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use crate::telemetry::TelemetrySource;
 use crate::types::{DecisionStatus, SchedulerState, TaskType};
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -19,6 +20,11 @@ pub struct TaskObservation {
     pub decision: DecisionStatus,
     pub queue_pressure: u32,
     pub scheduler_state: SchedulerState,
+    pub telemetry_source: TelemetrySource,
+    pub telemetry_valid: bool,
+    pub memory_usage_percent: f32,
+    pub temperature_c: f32,
+    pub gpu_utilization: f32,
     pub lease_id: Option<String>,
     pub pool_slot_id: usize,
     pub latency_ms: Option<u64>,
@@ -30,6 +36,9 @@ pub struct TaskObservation {
     pub feature_mean: Option<f32>,
     pub feature_entropy: Option<f32>,
     pub feature_edge_density: Option<f32>,
+    pub change_baseline_ready: Option<bool>,
+    pub change_score: Option<f32>,
+    pub change_detected: Option<bool>,
 }
 
 #[derive(Debug)]
@@ -56,7 +65,7 @@ impl ObservabilityLogger {
                 if is_empty {
                     writeln!(
                         writer,
-                        "timestamp_ms,trace_id,stage,task_id,task_type,decision,queue_pressure,scheduler_state,lease_id,pool_slot_id,latency_ms,execution_time_ms,runtime_ok,feature_dim,input_bytes,feature_checksum,feature_mean,feature_entropy,feature_edge_density"
+                        "timestamp_ms,trace_id,stage,task_id,task_type,decision,queue_pressure,scheduler_state,telemetry_source,telemetry_valid,memory_usage_percent,temperature_c,gpu_utilization,lease_id,pool_slot_id,latency_ms,execution_time_ms,runtime_ok,feature_dim,input_bytes,feature_checksum,feature_mean,feature_entropy,feature_edge_density,change_baseline_ready,change_score,change_detected"
                     )?;
                 }
                 Some(writer)
@@ -88,7 +97,7 @@ impl TaskObservation {
 
     fn to_json_line(&self, timestamp_ms: u128) -> String {
         format!(
-            "{{\"timestamp_ms\":{},\"trace_id\":\"{}\",\"stage\":\"{}\",\"task_id\":{},\"task_type\":\"{}\",\"decision\":\"{}\",\"queue_pressure\":{},\"scheduler_state\":\"{}\",\"lease_id\":{},\"pool_slot_id\":{},\"latency_ms\":{},\"execution_time_ms\":{},\"runtime_ok\":{},\"feature_dim\":{},\"input_bytes\":{},\"feature_checksum\":{},\"feature_mean\":{},\"feature_entropy\":{},\"feature_edge_density\":{}}}",
+            "{{\"timestamp_ms\":{},\"trace_id\":\"{}\",\"stage\":\"{}\",\"task_id\":{},\"task_type\":\"{}\",\"decision\":\"{}\",\"queue_pressure\":{},\"scheduler_state\":\"{}\",\"telemetry_source\":\"{}\",\"telemetry_valid\":{},\"memory_usage_percent\":{},\"temperature_c\":{},\"gpu_utilization\":{},\"lease_id\":{},\"pool_slot_id\":{},\"latency_ms\":{},\"execution_time_ms\":{},\"runtime_ok\":{},\"feature_dim\":{},\"input_bytes\":{},\"feature_checksum\":{},\"feature_mean\":{},\"feature_entropy\":{},\"feature_edge_density\":{},\"change_baseline_ready\":{},\"change_score\":{},\"change_detected\":{}}}",
             timestamp_ms,
             self.trace_id(),
             stage_name(&self.stage),
@@ -97,6 +106,11 @@ impl TaskObservation {
             decision_name(self.decision),
             self.queue_pressure,
             scheduler_state_name(self.scheduler_state),
+            self.telemetry_source.name(),
+            self.telemetry_valid,
+            format!("{:.3}", self.memory_usage_percent),
+            format!("{:.3}", self.temperature_c),
+            format!("{:.3}", self.gpu_utilization),
             optional_json_string(self.lease_id.as_deref()),
             self.pool_slot_id,
             optional_json_u64(self.latency_ms),
@@ -107,13 +121,16 @@ impl TaskObservation {
             optional_json_u64(self.feature_checksum),
             optional_json_f32(self.feature_mean),
             optional_json_f32(self.feature_entropy),
-            optional_json_f32(self.feature_edge_density)
+            optional_json_f32(self.feature_edge_density),
+            optional_json_bool(self.change_baseline_ready),
+            optional_json_f32(self.change_score),
+            optional_json_bool(self.change_detected)
         )
     }
 
     fn to_csv_line(&self, timestamp_ms: u128) -> String {
         format!(
-            "{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{}",
+            "{},{},{},{},{},{},{},{},{},{},{:.3},{:.3},{:.3},{},{},{},{},{},{},{},{},{},{},{},{},{},{}",
             timestamp_ms,
             self.trace_id(),
             stage_name(&self.stage),
@@ -122,6 +139,11 @@ impl TaskObservation {
             decision_name(self.decision),
             self.queue_pressure,
             scheduler_state_name(self.scheduler_state),
+            self.telemetry_source.name(),
+            self.telemetry_valid,
+            self.memory_usage_percent,
+            self.temperature_c,
+            self.gpu_utilization,
             self.lease_id.as_deref().unwrap_or(""),
             self.pool_slot_id,
             self.latency_ms
@@ -148,6 +170,15 @@ impl TaskObservation {
                 .unwrap_or_default(),
             self.feature_edge_density
                 .map(|value| format!("{value:.6}"))
+                .unwrap_or_default(),
+            self.change_baseline_ready
+                .map(|value| value.to_string())
+                .unwrap_or_default(),
+            self.change_score
+                .map(|value| format!("{value:.6}"))
+                .unwrap_or_default(),
+            self.change_detected
+                .map(|value| value.to_string())
                 .unwrap_or_default()
         )
     }
@@ -267,6 +298,11 @@ mod tests {
                 decision: DecisionStatus::ADMIT,
                 queue_pressure: 5,
                 scheduler_state: SchedulerState::NORMAL,
+                telemetry_source: TelemetrySource::Synthetic,
+                telemetry_valid: true,
+                memory_usage_percent: 40.0,
+                temperature_c: 45.0,
+                gpu_utilization: 0.0,
                 lease_id: Some("0001".to_string()),
                 pool_slot_id: 2,
                 latency_ms: Some(3),
@@ -278,6 +314,9 @@ mod tests {
                 feature_mean: Some(0.5),
                 feature_entropy: Some(2.0),
                 feature_edge_density: Some(0.25),
+                change_baseline_ready: Some(true),
+                change_score: Some(0.12),
+                change_detected: Some(true),
             })
             .expect("observation should write");
 
@@ -289,6 +328,8 @@ mod tests {
         assert!(json.contains("\"feature_dim\":7"));
         assert!(json.contains("\"feature_checksum\":123"));
         assert!(json.contains("\"runtime_ok\":true"));
+        assert!(json.contains("\"telemetry_source\":\"synthetic\""));
+        assert!(json.contains("\"change_detected\":true"));
 
         let csv_content = fs::read_to_string(&csv).expect("csv should be readable");
         assert!(csv_content.contains("timestamp_ms,trace_id,stage"));
