@@ -13,6 +13,9 @@ pub mod ffi {
         pub edge_density: f32,
         pub entropy: f32,
         pub checksum: u64,
+        pub vlm_output_tokens: u32,
+        pub vlm_confidence: f32,
+        pub vlm_answer_code: u32,
     }
 
     unsafe extern "C++" {
@@ -20,5 +23,6 @@ pub mod ffi {
 
         fn run(buffer: &[u8]) -> RuntimeResult;
         fn run_cv_features(buffer: &[u8]) -> RuntimeResult;
+        fn run_vlm_query(buffer: &[u8]) -> RuntimeResult;
     }
 }

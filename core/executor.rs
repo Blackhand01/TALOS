@@ -1,6 +1,6 @@
 use tokio::task;
 
-use crate::cxx_bridge::ffi::{run_cv_features, RuntimeResult};
+use crate::cxx_bridge::ffi::{run_cv_features, run_vlm_query, RuntimeResult};
 use crate::types::{TaskRequest, TaskType};
 
 pub async fn dispatch_to_cpp(task: TaskRequest) -> Result<RuntimeResult, task::JoinError> {
@@ -8,23 +8,7 @@ pub async fn dispatch_to_cpp(task: TaskRequest) -> Result<RuntimeResult, task::J
         TaskType::CV_FEATURES | TaskType::CHANGE_DETECTION => {
             task::spawn_blocking(move || run_cv_features(&task.frame)).await
         }
-        TaskType::VLM_QUERY => Ok(unsupported_runtime_result(task.frame.len() as u64)),
-    }
-}
-
-const fn unsupported_runtime_result(input_bytes: u64) -> RuntimeResult {
-    RuntimeResult {
-        ok: false,
-        latency_ms: 0,
-        feature_dim: 0,
-        input_bytes,
-        mean: 0.0,
-        variance: 0.0,
-        min_value: 0.0,
-        max_value: 0.0,
-        edge_density: 0.0,
-        entropy: 0.0,
-        checksum: 0,
+        TaskType::VLM_QUERY => task::spawn_blocking(move || run_vlm_query(&task.frame)).await,
     }
 }
 
@@ -77,7 +61,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn vlm_workloads_do_not_enter_cv_runtime() {
+    async fn vlm_workloads_enter_quantized_vlm_runtime() {
         let task = TaskRequest {
             task_id: 3,
             task_type: TaskType::VLM_QUERY,
@@ -90,10 +74,13 @@ mod tests {
 
         let result = dispatch_to_cpp(task)
             .await
-            .expect("unsupported workload should return synchronously");
-        assert!(!result.ok);
-        assert_eq!(result.latency_ms, 0);
+            .expect("spawn_blocking should complete");
+        assert!(result.ok);
+        assert_eq!(result.latency_ms, 1);
         assert_eq!(result.feature_dim, 0);
         assert_eq!(result.input_bytes, 4);
+        assert!(result.vlm_output_tokens > 0);
+        assert!(result.vlm_confidence > 0.0);
+        assert_ne!(result.vlm_answer_code, 0);
     }
 }

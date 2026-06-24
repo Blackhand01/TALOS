@@ -1,6 +1,7 @@
 use crate::types::{
     Decision, DecisionStatus, SchedulerState, SystemTelemetry, TaskPriority, TaskRequest, TaskType,
 };
+use crate::vlm::{QuantizedVlmProfile, VlmGateDecision};
 
 #[derive(Clone, Copy, Debug)]
 pub struct AdmissionController {
@@ -8,6 +9,7 @@ pub struct AdmissionController {
     pub memory_reject_percent: f32,
     pub vlm_memory_gate_percent: f32,
     pub vlm_temperature_gate_c: f32,
+    pub vlm_profile: QuantizedVlmProfile,
 }
 
 impl Default for AdmissionController {
@@ -17,6 +19,7 @@ impl Default for AdmissionController {
             memory_reject_percent: 85.0,
             vlm_memory_gate_percent: 75.0,
             vlm_temperature_gate_c: 75.0,
+            vlm_profile: QuantizedVlmProfile::default(),
         }
     }
 }
@@ -34,10 +37,11 @@ impl AdmissionController {
             return self.decision(DecisionStatus::DEFER);
         }
 
-        if task.task_type == TaskType::VLM_QUERY
-            && telemetry.memory_usage_percent > self.memory_reject_percent
-        {
-            return self.decision(DecisionStatus::REJECT);
+        if task.task_type == TaskType::VLM_QUERY {
+            return self.decision(
+                self.vlm_gate_decision(task, telemetry, state, false, cv_burst_active)
+                    .status,
+            );
         }
 
         match state {
@@ -64,6 +68,21 @@ impl AdmissionController {
                 }
             }
         }
+    }
+
+    pub fn vlm_gate_decision(
+        &self,
+        task: &TaskRequest,
+        telemetry: &SystemTelemetry,
+        state: SchedulerState,
+        gpu_lease_active: bool,
+        cv_burst_active: bool,
+    ) -> VlmGateDecision {
+        let mut profile = self.vlm_profile;
+        profile.hard_memory_gate_percent = self.memory_reject_percent;
+        profile.soft_memory_gate_percent = self.vlm_memory_gate_percent;
+        profile.temperature_gate_c = self.vlm_temperature_gate_c;
+        profile.evaluate(task, telemetry, state, gpu_lease_active, cv_burst_active)
     }
 
     fn normal_policy(

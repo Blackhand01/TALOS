@@ -7,8 +7,9 @@ use talos::executor::dispatch_to_cpp;
 use talos::{
     default_csv_path, default_jsonl_path, AdmissionController, ChangeDetector, DecisionStatus,
     FeatureEmbedding, GpuLeaseManager, MockFrameIngestor, ObservabilityLogger, ObservationStage,
-    SchedulerState, StateMachine, SystemTelemetry, TaskObservation, TaskRequest, TaskScheduler,
-    TaskType, TelemetryMonitor, TelemetrySource,
+    SchedulerState, StateMachine, SystemTelemetry, TaskObservation, TaskPriority, TaskRequest,
+    TaskScheduler, TaskType, TelemetryMonitor, TelemetrySource, VlmGateDecision,
+    VlmRuntimeMetadata,
 };
 use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
@@ -27,6 +28,7 @@ struct Args {
 enum WorkloadMode {
     Cv,
     ChangeDetection,
+    Vlm,
     Alternating,
 }
 
@@ -82,11 +84,11 @@ fn parse_args() -> Result<Args, Box<dyn std::error::Error>> {
             "--workload" => {
                 let value = args.next().ok_or("--workload requires a mode")?;
                 workload = parse_workload_mode(&value)
-                    .ok_or("workload must be cv, change-detection, or alternating")?;
+                    .ok_or("workload must be cv, change-detection, vlm, or alternating")?;
             }
             "--help" | "-h" => {
                 println!(
-                    "Usage: edge_node [--demo-dtu PATH] [--max-tasks N] [--log-jsonl PATH] [--log-csv PATH] [--no-csv] [--telemetry synthetic|tegrastats|jtop] [--workload cv|change-detection|alternating]"
+                    "Usage: edge_node [--demo-dtu PATH] [--max-tasks N] [--log-jsonl PATH] [--log-csv PATH] [--no-csv] [--telemetry synthetic|tegrastats|jtop] [--workload cv|change-detection|vlm|alternating]"
                 );
                 std::process::exit(0);
             }
@@ -122,7 +124,7 @@ async fn run_dtu_demo(
         for _ in 0..max_tasks {
             match ingestor.read_next_task() {
                 Ok(Some(mut task)) => {
-                    task.task_type = workload_task_type(workload, task.task_id);
+                    apply_workload(&mut task, workload);
                     if task_tx.send(task).await.is_err() {
                         return;
                     }
@@ -235,13 +237,21 @@ fn evaluate_and_dispatch(
     logger: Arc<Mutex<ObservabilityLogger>>,
 ) -> Option<JoinHandle<()>> {
     let queue_pressure = scheduler.queue_pressure();
-    let decision = admission.decide(
-        &task,
-        &telemetry,
-        state,
-        lease_manager.is_active(),
-        scheduler.cv_burst_active(),
-    );
+    let gpu_lease_active = lease_manager.is_active();
+    let cv_burst_active = scheduler.cv_burst_active();
+    let vlm_gate = if task.task_type == TaskType::VLM_QUERY {
+        Some(admission.vlm_gate_decision(
+            &task,
+            &telemetry,
+            state,
+            gpu_lease_active,
+            cv_burst_active,
+        ))
+    } else {
+        None
+    };
+    let vlm_metadata = admission.vlm_profile.runtime_metadata();
+    let decision = admission.decide(&task, &telemetry, state, gpu_lease_active, cv_burst_active);
 
     match decision.status {
         DecisionStatus::ADMIT => {
@@ -267,6 +277,16 @@ fn evaluate_and_dispatch(
                                 } else {
                                     None
                                 };
+                            let vlm_runtime = if task_type == TaskType::VLM_QUERY && result.ok {
+                                Some((
+                                    vlm_metadata,
+                                    result.vlm_output_tokens,
+                                    result.vlm_confidence,
+                                    result.vlm_answer_code,
+                                ))
+                            } else {
+                                None
+                            };
                             record_observation(
                                 &logger,
                                 TaskObservation {
@@ -296,16 +316,30 @@ fn evaluate_and_dispatch(
                                         .map(|result| result.baseline_ready),
                                     change_score: change_result.map(|result| result.score),
                                     change_detected: change_result.map(|result| result.changed),
+                                    vlm_model: vlm_runtime
+                                        .map(|(metadata, _, _, _)| metadata.model_name.to_string()),
+                                    vlm_quantization_bits: vlm_runtime
+                                        .map(|(metadata, _, _, _)| metadata.quantization_bits),
+                                    vlm_gate_reason: vlm_gate
+                                        .map(|gate| gate.reason.as_str().to_string()),
+                                    vlm_output_tokens: vlm_runtime.map(|(_, tokens, _, _)| tokens),
+                                    vlm_confidence: vlm_runtime
+                                        .map(|(_, _, confidence, _)| confidence),
+                                    vlm_answer_code: vlm_runtime
+                                        .map(|(_, _, _, answer_code)| answer_code),
                                 },
                             );
                             println!(
-                                "lease={lease_id} runtime_ok={} latency_ms={} feature_dim={} checksum={} change_score={}",
+                                "lease={lease_id} runtime_ok={} latency_ms={} feature_dim={} checksum={} change_score={} vlm_tokens={}",
                                 result.ok,
                                 result.latency_ms,
                                 result.feature_dim,
                                 result.checksum,
                                 change_result
                                     .map(|result| format!("{:.4}", result.score))
+                                    .unwrap_or_else(|| "n/a".to_string()),
+                                vlm_runtime
+                                    .map(|(_, tokens, _, _)| tokens.to_string())
                                     .unwrap_or_else(|| "n/a".to_string())
                             );
                         }
@@ -339,6 +373,13 @@ fn evaluate_and_dispatch(
                                     change_baseline_ready: None,
                                     change_score: None,
                                     change_detected: None,
+                                    vlm_model: None,
+                                    vlm_quantization_bits: None,
+                                    vlm_gate_reason: vlm_gate
+                                        .map(|gate| gate.reason.as_str().to_string()),
+                                    vlm_output_tokens: None,
+                                    vlm_confidence: None,
+                                    vlm_answer_code: None,
                                 },
                             );
                             eprintln!("lease={lease_id} execution join error: {error}");
@@ -354,6 +395,8 @@ fn evaluate_and_dispatch(
                     telemetry,
                     telemetry_source,
                     telemetry_valid,
+                    vlm_gate,
+                    vlm_metadata,
                     state,
                 );
                 scheduler.defer(task);
@@ -369,6 +412,8 @@ fn evaluate_and_dispatch(
                 telemetry,
                 telemetry_source,
                 telemetry_valid,
+                vlm_gate,
+                vlm_metadata,
                 state,
             );
             scheduler.defer(task);
@@ -383,6 +428,8 @@ fn evaluate_and_dispatch(
                 telemetry,
                 telemetry_source,
                 telemetry_valid,
+                vlm_gate,
+                vlm_metadata,
                 state,
             );
             println!(
@@ -402,6 +449,8 @@ fn record_decision_observation(
     telemetry: SystemTelemetry,
     telemetry_source: TelemetrySource,
     telemetry_valid: bool,
+    vlm_gate: Option<VlmGateDecision>,
+    vlm_metadata: VlmRuntimeMetadata,
     state: SchedulerState,
 ) {
     record_observation(
@@ -432,6 +481,12 @@ fn record_decision_observation(
             change_baseline_ready: None,
             change_score: None,
             change_detected: None,
+            vlm_model: vlm_gate.map(|_| vlm_metadata.model_name.to_string()),
+            vlm_quantization_bits: vlm_gate.map(|_| vlm_metadata.quantization_bits),
+            vlm_gate_reason: vlm_gate.map(|gate| gate.reason.as_str().to_string()),
+            vlm_output_tokens: None,
+            vlm_confidence: None,
+            vlm_answer_code: None,
         },
     );
 }
@@ -455,21 +510,31 @@ fn parse_workload_mode(value: &str) -> Option<WorkloadMode> {
     match value {
         "cv" => Some(WorkloadMode::Cv),
         "change-detection" => Some(WorkloadMode::ChangeDetection),
+        "vlm" => Some(WorkloadMode::Vlm),
         "alternating" => Some(WorkloadMode::Alternating),
         _ => None,
     }
 }
 
-fn workload_task_type(workload: WorkloadMode, task_id: u64) -> TaskType {
-    match workload {
+fn apply_workload(task: &mut TaskRequest, workload: WorkloadMode) {
+    task.task_type = match workload {
         WorkloadMode::Cv => TaskType::CV_FEATURES,
         WorkloadMode::ChangeDetection => TaskType::CHANGE_DETECTION,
+        WorkloadMode::Vlm => TaskType::VLM_QUERY,
         WorkloadMode::Alternating => {
-            if task_id % 2 == 0 {
+            if task.task_id % 3 == 0 {
+                TaskType::VLM_QUERY
+            } else if task.task_id % 2 == 0 {
                 TaskType::CHANGE_DETECTION
             } else {
                 TaskType::CV_FEATURES
             }
         }
+    };
+
+    if task.task_type == TaskType::VLM_QUERY {
+        task.priority = TaskPriority::LOW;
+        task.memory_estimate_mb = 2_304;
+        task.deadline_ms = 1_000;
     }
 }

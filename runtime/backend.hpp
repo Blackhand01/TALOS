@@ -10,5 +10,6 @@ struct RuntimeResult;
 
 RuntimeResult run(rust::Slice<const std::uint8_t> buffer);
 RuntimeResult run_cv_features(rust::Slice<const std::uint8_t> buffer);
+RuntimeResult run_vlm_query(rust::Slice<const std::uint8_t> buffer);
 
 }  // namespace talos::runtime

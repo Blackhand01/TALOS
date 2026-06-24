@@ -39,6 +39,12 @@ pub struct TaskObservation {
     pub change_baseline_ready: Option<bool>,
     pub change_score: Option<f32>,
     pub change_detected: Option<bool>,
+    pub vlm_model: Option<String>,
+    pub vlm_quantization_bits: Option<u32>,
+    pub vlm_gate_reason: Option<String>,
+    pub vlm_output_tokens: Option<u32>,
+    pub vlm_confidence: Option<f32>,
+    pub vlm_answer_code: Option<u32>,
 }
 
 #[derive(Debug)]
@@ -65,7 +71,7 @@ impl ObservabilityLogger {
                 if is_empty {
                     writeln!(
                         writer,
-                        "timestamp_ms,trace_id,stage,task_id,task_type,decision,queue_pressure,scheduler_state,telemetry_source,telemetry_valid,memory_usage_percent,temperature_c,gpu_utilization,lease_id,pool_slot_id,latency_ms,execution_time_ms,runtime_ok,feature_dim,input_bytes,feature_checksum,feature_mean,feature_entropy,feature_edge_density,change_baseline_ready,change_score,change_detected"
+                        "timestamp_ms,trace_id,stage,task_id,task_type,decision,queue_pressure,scheduler_state,telemetry_source,telemetry_valid,memory_usage_percent,temperature_c,gpu_utilization,lease_id,pool_slot_id,latency_ms,execution_time_ms,runtime_ok,feature_dim,input_bytes,feature_checksum,feature_mean,feature_entropy,feature_edge_density,change_baseline_ready,change_score,change_detected,vlm_model,vlm_quantization_bits,vlm_gate_reason,vlm_output_tokens,vlm_confidence,vlm_answer_code"
                     )?;
                 }
                 Some(writer)
@@ -97,7 +103,7 @@ impl TaskObservation {
 
     fn to_json_line(&self, timestamp_ms: u128) -> String {
         format!(
-            "{{\"timestamp_ms\":{},\"trace_id\":\"{}\",\"stage\":\"{}\",\"task_id\":{},\"task_type\":\"{}\",\"decision\":\"{}\",\"queue_pressure\":{},\"scheduler_state\":\"{}\",\"telemetry_source\":\"{}\",\"telemetry_valid\":{},\"memory_usage_percent\":{},\"temperature_c\":{},\"gpu_utilization\":{},\"lease_id\":{},\"pool_slot_id\":{},\"latency_ms\":{},\"execution_time_ms\":{},\"runtime_ok\":{},\"feature_dim\":{},\"input_bytes\":{},\"feature_checksum\":{},\"feature_mean\":{},\"feature_entropy\":{},\"feature_edge_density\":{},\"change_baseline_ready\":{},\"change_score\":{},\"change_detected\":{}}}",
+            "{{\"timestamp_ms\":{},\"trace_id\":\"{}\",\"stage\":\"{}\",\"task_id\":{},\"task_type\":\"{}\",\"decision\":\"{}\",\"queue_pressure\":{},\"scheduler_state\":\"{}\",\"telemetry_source\":\"{}\",\"telemetry_valid\":{},\"memory_usage_percent\":{},\"temperature_c\":{},\"gpu_utilization\":{},\"lease_id\":{},\"pool_slot_id\":{},\"latency_ms\":{},\"execution_time_ms\":{},\"runtime_ok\":{},\"feature_dim\":{},\"input_bytes\":{},\"feature_checksum\":{},\"feature_mean\":{},\"feature_entropy\":{},\"feature_edge_density\":{},\"change_baseline_ready\":{},\"change_score\":{},\"change_detected\":{},\"vlm_model\":{},\"vlm_quantization_bits\":{},\"vlm_gate_reason\":{},\"vlm_output_tokens\":{},\"vlm_confidence\":{},\"vlm_answer_code\":{}}}",
             timestamp_ms,
             self.trace_id(),
             stage_name(&self.stage),
@@ -124,13 +130,19 @@ impl TaskObservation {
             optional_json_f32(self.feature_edge_density),
             optional_json_bool(self.change_baseline_ready),
             optional_json_f32(self.change_score),
-            optional_json_bool(self.change_detected)
+            optional_json_bool(self.change_detected),
+            optional_json_string(self.vlm_model.as_deref()),
+            optional_json_u32(self.vlm_quantization_bits),
+            optional_json_string(self.vlm_gate_reason.as_deref()),
+            optional_json_u32(self.vlm_output_tokens),
+            optional_json_f32(self.vlm_confidence),
+            optional_json_u32(self.vlm_answer_code)
         )
     }
 
     fn to_csv_line(&self, timestamp_ms: u128) -> String {
         format!(
-            "{},{},{},{},{},{},{},{},{},{},{:.3},{:.3},{:.3},{},{},{},{},{},{},{},{},{},{},{},{},{},{}",
+            "{},{},{},{},{},{},{},{},{},{},{:.3},{:.3},{:.3},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{}",
             timestamp_ms,
             self.trace_id(),
             stage_name(&self.stage),
@@ -178,6 +190,20 @@ impl TaskObservation {
                 .map(|value| format!("{value:.6}"))
                 .unwrap_or_default(),
             self.change_detected
+                .map(|value| value.to_string())
+                .unwrap_or_default(),
+            self.vlm_model.as_deref().unwrap_or(""),
+            self.vlm_quantization_bits
+                .map(|value| value.to_string())
+                .unwrap_or_default(),
+            self.vlm_gate_reason.as_deref().unwrap_or(""),
+            self.vlm_output_tokens
+                .map(|value| value.to_string())
+                .unwrap_or_default(),
+            self.vlm_confidence
+                .map(|value| format!("{value:.6}"))
+                .unwrap_or_default(),
+            self.vlm_answer_code
                 .map(|value| value.to_string())
                 .unwrap_or_default()
         )
@@ -317,6 +343,12 @@ mod tests {
                 change_baseline_ready: Some(true),
                 change_score: Some(0.12),
                 change_detected: Some(true),
+                vlm_model: Some("qwen2.5-vl-int4".to_string()),
+                vlm_quantization_bits: Some(4),
+                vlm_gate_reason: Some("admit_quantized".to_string()),
+                vlm_output_tokens: Some(16),
+                vlm_confidence: Some(0.74),
+                vlm_answer_code: Some(42),
             })
             .expect("observation should write");
 
@@ -330,6 +362,7 @@ mod tests {
         assert!(json.contains("\"runtime_ok\":true"));
         assert!(json.contains("\"telemetry_source\":\"synthetic\""));
         assert!(json.contains("\"change_detected\":true"));
+        assert!(json.contains("\"vlm_model\":\"qwen2.5-vl-int4\""));
 
         let csv_content = fs::read_to_string(&csv).expect("csv should be readable");
         assert!(csv_content.contains("timestamp_ms,trace_id,stage"));

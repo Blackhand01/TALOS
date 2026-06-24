@@ -6,8 +6,10 @@ pub mod leases;
 pub mod observability;
 pub mod scheduler;
 pub mod state_machine;
+pub mod stress;
 pub mod telemetry;
 pub mod types;
+pub mod vlm;
 
 #[path = "../ipc/cxx_bridge.rs"]
 pub mod cxx_bridge;
@@ -23,6 +25,7 @@ pub use observability::{
 };
 pub use scheduler::TaskScheduler;
 pub use state_machine::StateMachine;
+pub use stress::ThermalStressSimulator;
 pub use telemetry::{
     JetsonTelemetryMonitor, SyntheticTelemetryMonitor, TelemetryMonitor, TelemetrySample,
     TelemetrySource,
@@ -30,3 +33,4 @@ pub use telemetry::{
 pub use types::{
     Decision, DecisionStatus, SchedulerState, SystemTelemetry, TaskPriority, TaskRequest, TaskType,
 };
+pub use vlm::{QuantizedVlmProfile, VlmGateDecision, VlmGateReason, VlmRuntimeMetadata};

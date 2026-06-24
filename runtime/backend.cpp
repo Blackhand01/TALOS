@@ -3,6 +3,7 @@
 #include <chrono>
 
 #include "runtime/cv/features.hpp"
+#include "runtime/vlm/query.hpp"
 #include "talos/ipc/cxx_bridge.rs.h"
 
 namespace talos::runtime {
@@ -30,6 +31,34 @@ RuntimeResult run_cv_features(rust::Slice<const std::uint8_t> buffer) {
     result.edge_density = features.edge_density;
     result.entropy = features.entropy;
     result.checksum = features.checksum;
+    result.vlm_output_tokens = 0;
+    result.vlm_confidence = 0.0F;
+    result.vlm_answer_code = 0;
+    return result;
+}
+
+RuntimeResult run_vlm_query(rust::Slice<const std::uint8_t> buffer) {
+    const auto started = std::chrono::steady_clock::now();
+    const vlm::QuerySummary query = vlm::run_quantized_query(buffer);
+    const auto elapsed = std::chrono::steady_clock::now() - started;
+    const auto elapsed_ms =
+        std::chrono::duration_cast<std::chrono::milliseconds>(elapsed).count();
+
+    RuntimeResult result;
+    result.ok = query.ok;
+    result.latency_ms = query.ok ? static_cast<std::uint64_t>(elapsed_ms < 1 ? 1 : elapsed_ms) : 0;
+    result.feature_dim = 0;
+    result.input_bytes = query.input_bytes;
+    result.mean = 0.0F;
+    result.variance = 0.0F;
+    result.min_value = 0.0F;
+    result.max_value = 0.0F;
+    result.edge_density = 0.0F;
+    result.entropy = 0.0F;
+    result.checksum = query.checksum;
+    result.vlm_output_tokens = query.output_tokens;
+    result.vlm_confidence = query.confidence;
+    result.vlm_answer_code = query.answer_code;
     return result;
 }
 
