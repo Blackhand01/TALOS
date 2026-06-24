@@ -33,10 +33,12 @@ mod tests {
             .expect("spawn_blocking should complete");
         assert!(result.ok);
         assert_eq!(result.latency_ms, 1);
-        assert_eq!(result.feature_dim, 7);
+        assert_eq!(result.feature_dim, 11);
         assert_eq!(result.input_bytes, 4);
         assert!(result.mean > 0.0);
         assert!(result.entropy > 0.0);
+        assert!(result.anomaly_score >= 0.0);
+        assert!(result.texture_score >= 0.0);
         assert_ne!(result.checksum, 0);
     }
 
@@ -56,8 +58,9 @@ mod tests {
             .await
             .expect("spawn_blocking should complete");
         assert!(result.ok);
-        assert_eq!(result.feature_dim, 7);
+        assert_eq!(result.feature_dim, 11);
         assert_ne!(result.checksum, 0);
+        assert!(result.detection_count <= 64);
     }
 
     #[tokio::test]

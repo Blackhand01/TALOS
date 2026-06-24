@@ -336,6 +336,10 @@ fn evaluate_and_dispatch(
                                     feature_mean: Some(result.mean),
                                     feature_entropy: Some(result.entropy),
                                     feature_edge_density: Some(result.edge_density),
+                                    feature_saliency_score: Some(result.saliency_score),
+                                    feature_texture_score: Some(result.texture_score),
+                                    feature_anomaly_score: Some(result.anomaly_score),
+                                    feature_detection_count: Some(result.detection_count),
                                     change_baseline_ready: change_result
                                         .map(|result| result.baseline_ready),
                                     change_score: change_result.map(|result| result.score),
@@ -351,6 +355,10 @@ fn evaluate_and_dispatch(
                                         .map(|(_, _, confidence, _)| confidence),
                                     vlm_answer_code: vlm_runtime
                                         .map(|(_, _, _, answer_code)| answer_code),
+                                    real_model_backend: None,
+                                    real_model_name: None,
+                                    real_model_exit_code: None,
+                                    real_model_peak_cuda_mb: None,
                                 },
                             );
                             println!(
@@ -394,6 +402,10 @@ fn evaluate_and_dispatch(
                                     feature_mean: None,
                                     feature_entropy: None,
                                     feature_edge_density: None,
+                                    feature_saliency_score: None,
+                                    feature_texture_score: None,
+                                    feature_anomaly_score: None,
+                                    feature_detection_count: None,
                                     change_baseline_ready: None,
                                     change_score: None,
                                     change_detected: None,
@@ -404,6 +416,10 @@ fn evaluate_and_dispatch(
                                     vlm_output_tokens: None,
                                     vlm_confidence: None,
                                     vlm_answer_code: None,
+                                    real_model_backend: None,
+                                    real_model_name: None,
+                                    real_model_exit_code: None,
+                                    real_model_peak_cuda_mb: None,
                                 },
                             );
                             eprintln!("lease={lease_id} execution join error: {error}");
@@ -502,6 +518,10 @@ fn record_decision_observation(
             feature_mean: None,
             feature_entropy: None,
             feature_edge_density: None,
+            feature_saliency_score: None,
+            feature_texture_score: None,
+            feature_anomaly_score: None,
+            feature_detection_count: None,
             change_baseline_ready: None,
             change_score: None,
             change_detected: None,
@@ -511,6 +531,10 @@ fn record_decision_observation(
             vlm_output_tokens: None,
             vlm_confidence: None,
             vlm_answer_code: None,
+            real_model_backend: None,
+            real_model_name: None,
+            real_model_exit_code: None,
+            real_model_peak_cuda_mb: None,
         },
     );
 }

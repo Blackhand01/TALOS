@@ -4,6 +4,7 @@ pub mod deployment;
 pub mod executor;
 pub mod ingestion;
 pub mod leases;
+pub mod model_backend;
 pub mod observability;
 pub mod optimization;
 pub mod profiles;
@@ -26,6 +27,7 @@ pub use deployment::{
 };
 pub use ingestion::MockFrameIngestor;
 pub use leases::{GpuLease, GpuLeaseManager};
+pub use model_backend::{run_real_model, RealModelBackend, RealModelConfig, RealModelRun};
 pub use observability::{
     default_csv_path, default_jsonl_path, ObservabilityLogger, ObservationStage, TaskObservation,
 };

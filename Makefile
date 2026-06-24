@@ -12,7 +12,9 @@ LOCAL_TARGET_DIR ?= /tmp/talos-target
 SSH ?= ssh
 RSYNC ?= rsync
 CARGO ?= cargo
+PYTHON ?= python3
 CUDA_HOME ?= /usr/local/cuda
+TRTEXEC_CANDIDATES ?= trtexec /usr/src/tensorrt/bin/trtexec /usr/local/TensorRT/bin/trtexec
 
 SSH_CONTROL_PATH ?= /tmp/talos-ssh-%r@%h:%p
 SSH_OPTS ?= -o ServerAliveInterval=30 -o ServerAliveCountMax=3 -o ControlMaster=auto -o ControlPersist=10m -o ControlPath=$(SSH_CONTROL_PATH)
@@ -47,6 +49,11 @@ CUDA_BURN_THREADS ?= 256
 CUDA_BURN_ITERATIONS ?= 40000
 GPU_RESOURCE_ARGS ?= --workload thermal --tasks 100000 --duration-secs $(CUDA_BURN_SECONDS) --progress-every 1 --cpu-burn-threads auto --target-temp-c 70 --stop-temp-c 82 --memory-pressure-mb 4096 --vlm-temperature-gate-c 70 --telemetry sysfs --sample-ms 50 --inter-task-ms 0 --payload-bytes 1048576 --log-jsonl logs/hitl-gpu-resource-max.jsonl --no-csv
 JETSON_HARDEN_ARGS ?= --mode 0
+REAL_MODEL_ARGS ?= --backend tensorrt-engine --model models/vision.engine --tasks 1 --telemetry tegrastats --log-jsonl logs/hitl-real-model.jsonl --no-csv
+TRT_ONNX_ARGS ?= --backend tensorrt-onnx --model models/vision.onnx --tasks 1 --telemetry tegrastats --log-jsonl logs/hitl-trt-onnx.jsonl --no-csv
+SMOLVLM_ARGS ?= --backend smolvlm-cuda --model HuggingFaceTB/SmolVLM-256M-Instruct --tasks 1 --telemetry tegrastats --log-jsonl logs/hitl-smolvlm-cuda.jsonl --no-csv
+TINY_VISION_ONNX ?= models/vision.onnx
+TINY_VISION_ARGS ?= --backend tensorrt-onnx --model $(TINY_VISION_ONNX) --backend-arg --fp16 --tasks 3 --telemetry tegrastats --log-jsonl logs/hitl-tiny-vision-trt.jsonl --no-csv
 
 .PHONY: help
 help: ## Show available targets.
@@ -79,6 +86,19 @@ hitl-baseline: ## Run a local HITL baseline if this system exposes compatible /s
 hitl-heavy: ## Run a local heavy HITL workload if this system exposes compatible /sys telemetry.
 	mkdir -p logs
 	CARGO_TARGET_DIR=$(LOCAL_TARGET_DIR) $(CARGO) run --bin talos_hitl -- $(HITL_HEAVY_ARGS)
+
+.PHONY: real-model
+real-model: ## Run local TALOS control plane around a real external model backend.
+	mkdir -p logs
+	CARGO_TARGET_DIR=$(LOCAL_TARGET_DIR) $(CARGO) run --bin talos_real_model -- $(REAL_MODEL_ARGS)
+
+.PHONY: model-tiny-vision
+model-tiny-vision: ## Generate a small static ONNX vision model locally. Requires python onnx + numpy.
+	$(PYTHON) scripts/create_tiny_vision_onnx.py --output $(TINY_VISION_ONNX)
+
+.PHONY: report
+report: ## Generate README metrics, report, and SVG assets.
+	python3 scripts/generate_readme_assets.py
 
 .PHONY: jetson-ping
 jetson-ping: ## Verify SSH connectivity to the Jetson.
@@ -387,6 +407,49 @@ jetson-run-gpu-resource-max: jetson-build-cuda-burn ## Run CUDA burn concurrentl
 		(tegrastats --interval 1000 2>/dev/null | tee logs/hitl-gpu-resource-max-tegrastats.log) & tegrastats_pid=$$!; \
 		(/tmp/talos-tools/talos_cuda_burn $(CUDA_BURN_SECONDS) $(CUDA_BURN_BLOCKS) $(CUDA_BURN_THREADS) $(CUDA_BURN_ITERATIONS) | tee logs/hitl-cuda-burn.log) & cuda_burn_pid=$$!; \
 		CARGO_TARGET_DIR=$(JETSON_TARGET_DIR) cargo run --bin talos_hitl -- $(GPU_RESOURCE_ARGS)'
+
+.PHONY: jetson-run-real-model
+jetson-run-real-model: jetson-sync ## Run TALOS admission/lease/logging around a real external model backend. Override REAL_MODEL_ARGS='...'.
+	$(SSH) $(SSH_OPTS) $(JETSON_HOST) 'cd $(JETSON_DIR) && if [ -f "$$HOME/.cargo/env" ]; then . "$$HOME/.cargo/env"; fi && mkdir -p logs tmp && CARGO_TARGET_DIR=$(JETSON_TARGET_DIR) cargo run --bin talos_real_model -- $(REAL_MODEL_ARGS)'
+
+.PHONY: jetson-run-trt-onnx
+jetson-run-trt-onnx: jetson-sync ## Run TALOS around TensorRT trtexec from an ONNX model. Override TRT_ONNX_ARGS='...'.
+	$(SSH) $(SSH_OPTS) $(JETSON_HOST) 'set -e; \
+		cd $(JETSON_DIR); \
+		if [ -f "$$HOME/.cargo/env" ]; then . "$$HOME/.cargo/env"; fi; \
+		mkdir -p logs tmp; \
+		trtexec_path=""; \
+		for candidate in $(TRTEXEC_CANDIDATES); do if command -v "$$candidate" >/dev/null 2>&1; then trtexec_path="$$(command -v "$$candidate")"; break; elif [ -x "$$candidate" ]; then trtexec_path="$$candidate"; break; fi; done; \
+		test -n "$$trtexec_path" || { echo "trtexec missing: install TensorRT samples/tools or set TRTEXEC_CANDIDATES"; exit 127; }; \
+		echo "trtexec=$$trtexec_path"; \
+		TALOS_TRTEXEC="$$trtexec_path" CARGO_TARGET_DIR=$(JETSON_TARGET_DIR) cargo run --bin talos_real_model -- $(TRT_ONNX_ARGS)'
+
+.PHONY: jetson-run-smolvlm
+jetson-run-smolvlm: jetson-sync ## Run TALOS around a real SmolVLM CUDA inference on Jetson. Override SMOLVLM_ARGS='...'.
+	$(SSH) $(SSH_OPTS) $(JETSON_HOST) 'cd $(JETSON_DIR) && if [ -f "$$HOME/.cargo/env" ]; then . "$$HOME/.cargo/env"; fi && mkdir -p logs tmp && CARGO_TARGET_DIR=$(JETSON_TARGET_DIR) cargo run --bin talos_real_model -- $(SMOLVLM_ARGS)'
+
+.PHONY: jetson-setup-tiny-vision-onnx
+jetson-setup-tiny-vision-onnx: jetson-ssh-start jetson-sync ## Generate models/vision.onnx on the Jetson. Installs user-level Python deps if needed.
+	$(SSH) $(SSH_OPTS) $(JETSON_HOST) 'set -e; \
+		cd $(JETSON_DIR); \
+		mkdir -p models; \
+		if ! python3 -c "import onnx, numpy" >/dev/null 2>&1; then \
+			python3 -m pip install --user onnx numpy; \
+		fi; \
+		python3 scripts/create_tiny_vision_onnx.py --output $(TINY_VISION_ONNX); \
+		ls -lh $(TINY_VISION_ONNX)'
+
+.PHONY: jetson-run-tiny-vision-trt
+jetson-run-tiny-vision-trt: jetson-setup-tiny-vision-onnx ## Generate tiny ONNX on Jetson, then run it through TensorRT inside TALOS.
+	$(SSH) $(SSH_OPTS) $(JETSON_HOST) 'set -e; \
+		cd $(JETSON_DIR); \
+		if [ -f "$$HOME/.cargo/env" ]; then . "$$HOME/.cargo/env"; fi; \
+		mkdir -p logs tmp; \
+		trtexec_path=""; \
+		for candidate in $(TRTEXEC_CANDIDATES); do if command -v "$$candidate" >/dev/null 2>&1; then trtexec_path="$$(command -v "$$candidate")"; break; elif [ -x "$$candidate" ]; then trtexec_path="$$candidate"; break; fi; done; \
+		test -n "$$trtexec_path" || { echo "trtexec missing: install TensorRT samples/tools or set TRTEXEC_CANDIDATES"; exit 127; }; \
+		echo "trtexec=$$trtexec_path"; \
+		TALOS_TRTEXEC="$$trtexec_path" CARGO_TARGET_DIR=$(JETSON_TARGET_DIR) cargo run --bin talos_real_model -- $(TINY_VISION_ARGS)'
 
 .PHONY: jetson-logs
 jetson-logs: ## Pull Jetson logs into logs/jetson/.

@@ -1,0 +1,70 @@
+{
+  "run_id": "hitl_gpu_resource_max_thermal55",
+  "label": "HITL GPU thermal gate, Orin Nano",
+  "profile": "HITL",
+  "source": "Jetson Orin Nano run pasted from terminal, 2026-06-24 17:24 Europe/Rome",
+  "notes": "CUDA burn and TALOS thermal workload ran concurrently. VLM temperature gate was lowered to 55C to prove real hardware thermal gating without forcing an unsafe temperature.",
+  "hardware": {
+    "device": "NVIDIA Jetson Orin Nano 8GB",
+    "power_mode": "15W profile observed in prior hardening status"
+  },
+  "config": {
+    "telemetry": "sysfs plus tegrastats side channel",
+    "vlm_temperature_gate_c": 55.0,
+    "target_temp_c": 55.0,
+    "stop_temp_c": 78.0,
+    "memory_pressure_mb": 0,
+    "cuda_burn": true
+  },
+  "summary": {
+    "completed_tasks": 131,
+    "executed": 126,
+    "vlm_deferred": 5,
+    "vlm_thermal_pressure_deferrals": 5,
+    "vlm_memory_pressure_decisions": 0,
+    "peak_temperature_c": 55.312,
+    "peak_memory_percent": 22.567,
+    "peak_gpu_utilization_percent": 99.0,
+    "peak_cpu_utilization_percent": 100.0,
+    "peak_power_mw": 9170,
+    "target_temp_reached": true
+  },
+  "timeline": [
+    {
+      "elapsed_ms": 11067,
+      "temperature_c": 54.75,
+      "memory_percent": 22.482,
+      "gpu_utilization_percent": 99.0,
+      "vlm_deferred": 0,
+      "vlm_thermal_pressure_deferrals": 0,
+      "executed": 62
+    },
+    {
+      "elapsed_ms": 15506,
+      "temperature_c": 55.062,
+      "memory_percent": 22.493,
+      "gpu_utilization_percent": 99.0,
+      "vlm_deferred": 1,
+      "vlm_thermal_pressure_deferrals": 1,
+      "executed": 84
+    },
+    {
+      "elapsed_ms": 20367,
+      "temperature_c": 55.312,
+      "memory_percent": 22.518,
+      "gpu_utilization_percent": 99.0,
+      "vlm_deferred": 2,
+      "vlm_thermal_pressure_deferrals": 2,
+      "executed": 107
+    },
+    {
+      "elapsed_ms": 23706,
+      "temperature_c": 55.093,
+      "memory_percent": 22.567,
+      "gpu_utilization_percent": 99.0,
+      "vlm_deferred": 5,
+      "vlm_thermal_pressure_deferrals": 5,
+      "executed": 126
+    }
+  ]
+}

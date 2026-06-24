@@ -1,0 +1,285 @@
+{
+  "generated_by": "scripts/generate_readme_assets.py",
+  "jsonl_runs": [
+    {
+      "run_id": "sitl-mission-runtime-smoke-v2",
+      "label": "SITL mission runtime smoke",
+      "profile": "SITL",
+      "path": "logs/sitl-mission-runtime-smoke-v2.jsonl",
+      "observations": 24,
+      "executed": 23,
+      "admitted": 23,
+      "deferred": 1,
+      "rejected": 0,
+      "task_types": {
+        "CV_FEATURES": 14,
+        "VLM_QUERY": 5,
+        "CHANGE_DETECTION": 5
+      },
+      "scheduler_states": {
+        "NORMAL": 23,
+        "THROTTLE": 1
+      },
+      "vlm_gate_reasons": {
+        "admit_quantized": 4,
+        "thermal_pressure": 1
+      },
+      "execution_time_ms_p50": 1.0,
+      "execution_time_ms_p95": 1.0,
+      "runtime_latency_ms_p50": 1.0,
+      "runtime_latency_ms_p95": 1.0,
+      "feature_anomaly_score_p95": 0.451,
+      "feature_detection_count_max": 1.0,
+      "peak_temperature_c": 81.0,
+      "peak_memory_percent": 83.0,
+      "peak_gpu_utilization_percent": 72.0
+    },
+    {
+      "run_id": "sitl-phase8-optimization",
+      "label": "SITL Phase 8 optimization",
+      "profile": "SITL",
+      "path": "logs/sitl-phase8-optimization.jsonl",
+      "observations": 20,
+      "executed": 19,
+      "admitted": 19,
+      "deferred": 1,
+      "rejected": 0,
+      "task_types": {
+        "CV_FEATURES": 11,
+        "VLM_QUERY": 5,
+        "CHANGE_DETECTION": 4
+      },
+      "scheduler_states": {
+        "NORMAL": 19,
+        "THROTTLE": 1
+      },
+      "vlm_gate_reasons": {
+        "admit_quantized": 4,
+        "thermal_pressure": 1
+      },
+      "execution_time_ms_p50": 1.0,
+      "execution_time_ms_p95": 1.0,
+      "runtime_latency_ms_p50": 1.0,
+      "runtime_latency_ms_p95": 1.0,
+      "feature_anomaly_score_p95": 0.0,
+      "feature_detection_count_max": 0.0,
+      "peak_temperature_c": 81.0,
+      "peak_memory_percent": 83.0,
+      "peak_gpu_utilization_percent": 72.0
+    },
+    {
+      "run_id": "phase6-contention",
+      "label": "SITL Phase 6 contention",
+      "profile": "SITL",
+      "path": "logs/phase6-contention.jsonl",
+      "observations": 120,
+      "executed": 18,
+      "admitted": 18,
+      "deferred": 95,
+      "rejected": 7,
+      "task_types": {
+        "CV_FEATURES": 80,
+        "CHANGE_DETECTION": 20,
+        "VLM_QUERY": 20
+      },
+      "scheduler_states": {
+        "NORMAL": 12,
+        "HIGH_LOAD": 21,
+        "THROTTLE": 49,
+        "DEGRADED": 38
+      },
+      "vlm_gate_reasons": {
+        "admit_quantized": 3,
+        "gpu_lease_active": 16,
+        "memory_pressure": 1
+      },
+      "execution_time_ms_p50": 78.0,
+      "execution_time_ms_p95": 79.0,
+      "runtime_latency_ms_p50": 1.0,
+      "runtime_latency_ms_p95": 1.0,
+      "feature_anomaly_score_p95": 0.0,
+      "feature_detection_count_max": 0.0,
+      "peak_temperature_c": 92.0,
+      "peak_memory_percent": 90.0,
+      "peak_gpu_utilization_percent": 95.0
+    },
+    {
+      "run_id": "hitl-thermal-smoke",
+      "label": "HITL local thermal smoke",
+      "profile": "HITL smoke",
+      "path": "logs/hitl-thermal-smoke.jsonl",
+      "observations": 289,
+      "executed": 289,
+      "admitted": 289,
+      "deferred": 0,
+      "rejected": 0,
+      "task_types": {
+        "VLM_QUERY": 49,
+        "CV_FEATURES": 192,
+        "CHANGE_DETECTION": 48
+      },
+      "scheduler_states": {
+        "NORMAL": 289
+      },
+      "vlm_gate_reasons": {
+        "admit_quantized": 49
+      },
+      "execution_time_ms_p50": 2.0,
+      "execution_time_ms_p95": 3.0,
+      "runtime_latency_ms_p50": 2.0,
+      "runtime_latency_ms_p95": 2.0,
+      "feature_anomaly_score_p95": 0.0,
+      "feature_detection_count_max": 0.0,
+      "peak_temperature_c": 45.0,
+      "peak_memory_percent": 40.0,
+      "peak_gpu_utilization_percent": 0.0
+    },
+    {
+      "run_id": "hitl-resource-smoke",
+      "label": "HITL local resource smoke",
+      "profile": "HITL smoke",
+      "path": "logs/hitl-resource-smoke.jsonl",
+      "observations": 100,
+      "executed": 100,
+      "admitted": 100,
+      "deferred": 0,
+      "rejected": 0,
+      "task_types": {
+        "VLM_QUERY": 17,
+        "CV_FEATURES": 66,
+        "CHANGE_DETECTION": 17
+      },
+      "scheduler_states": {
+        "NORMAL": 100
+      },
+      "vlm_gate_reasons": {
+        "admit_quantized": 17
+      },
+      "execution_time_ms_p50": 2.0,
+      "execution_time_ms_p95": 3.0,
+      "runtime_latency_ms_p50": 2.0,
+      "runtime_latency_ms_p95": 3.0,
+      "feature_anomaly_score_p95": 0.0,
+      "feature_detection_count_max": 0.0,
+      "peak_temperature_c": 45.0,
+      "peak_memory_percent": 40.0,
+      "peak_gpu_utilization_percent": 0.0
+    }
+  ],
+  "hardware_runs": [
+    {
+      "run_id": "hitl_gpu_resource_max_thermal55",
+      "label": "HITL GPU thermal gate, Orin Nano",
+      "profile": "HITL",
+      "source": "Jetson Orin Nano run pasted from terminal, 2026-06-24 17:24 Europe/Rome",
+      "notes": "CUDA burn and TALOS thermal workload ran concurrently. VLM temperature gate was lowered to 55C to prove real hardware thermal gating without forcing an unsafe temperature.",
+      "hardware": {
+        "device": "NVIDIA Jetson Orin Nano 8GB",
+        "power_mode": "15W profile observed in prior hardening status"
+      },
+      "config": {
+        "telemetry": "sysfs plus tegrastats side channel",
+        "vlm_temperature_gate_c": 55.0,
+        "target_temp_c": 55.0,
+        "stop_temp_c": 78.0,
+        "memory_pressure_mb": 0,
+        "cuda_burn": true
+      },
+      "summary": {
+        "completed_tasks": 131,
+        "executed": 126,
+        "vlm_deferred": 5,
+        "vlm_thermal_pressure_deferrals": 5,
+        "vlm_memory_pressure_decisions": 0,
+        "peak_temperature_c": 55.312,
+        "peak_memory_percent": 22.567,
+        "peak_gpu_utilization_percent": 99.0,
+        "peak_cpu_utilization_percent": 100.0,
+        "peak_power_mw": 9170,
+        "target_temp_reached": true
+      },
+      "timeline": [
+        {
+          "elapsed_ms": 11067,
+          "temperature_c": 54.75,
+          "memory_percent": 22.482,
+          "gpu_utilization_percent": 99.0,
+          "vlm_deferred": 0,
+          "vlm_thermal_pressure_deferrals": 0,
+          "executed": 62
+        },
+        {
+          "elapsed_ms": 15506,
+          "temperature_c": 55.062,
+          "memory_percent": 22.493,
+          "gpu_utilization_percent": 99.0,
+          "vlm_deferred": 1,
+          "vlm_thermal_pressure_deferrals": 1,
+          "executed": 84
+        },
+        {
+          "elapsed_ms": 20367,
+          "temperature_c": 55.312,
+          "memory_percent": 22.518,
+          "gpu_utilization_percent": 99.0,
+          "vlm_deferred": 2,
+          "vlm_thermal_pressure_deferrals": 2,
+          "executed": 107
+        },
+        {
+          "elapsed_ms": 23706,
+          "temperature_c": 55.093,
+          "memory_percent": 22.567,
+          "gpu_utilization_percent": 99.0,
+          "vlm_deferred": 5,
+          "vlm_thermal_pressure_deferrals": 5,
+          "executed": 126
+        }
+      ],
+      "path": "reports/hardware_runs/hitl_gpu_resource_max_thermal55.json"
+    },
+    {
+      "run_id": "hitl_resource_max_memory",
+      "label": "HITL RAM and queue pressure, Orin Nano",
+      "profile": "HITL",
+      "source": "Jetson Orin Nano run pasted from terminal, 2026-06-24 17:05 Europe/Rome",
+      "notes": "TALOS thermal workload plus CPU burn and guarded memory pressure. This run proves real admission control under memory and queue pressure; it does not stress GR3D.",
+      "hardware": {
+        "device": "NVIDIA Jetson Orin Nano 8GB",
+        "power_mode": "15W profile observed in prior hardening status"
+      },
+      "config": {
+        "telemetry": "sysfs plus tegrastats side channel",
+        "duration_secs": 120,
+        "memory_pressure_mb": 4608,
+        "cpu_burn_threads": 6,
+        "cuda_burn": false
+      },
+      "summary": {
+        "completed_tasks": 640,
+        "admitted": 533,
+        "deferred": 107,
+        "rejected": 0,
+        "executed": 533,
+        "high_load_samples": 519,
+        "throttle_samples": 0,
+        "degraded_samples": 0,
+        "vlm_admitted": 0,
+        "vlm_deferred": 107,
+        "vlm_rejected": 0,
+        "vlm_thermal_pressure_deferrals": 0,
+        "vlm_memory_pressure_decisions": 21,
+        "execution_time_ms_p50": 173,
+        "execution_time_ms_p95": 212,
+        "runtime_latency_ms_p50": 171,
+        "runtime_latency_ms_p95": 211,
+        "throughput_tps": 4.438,
+        "peak_memory_percent": 82.948,
+        "peak_temperature_c": 53.593,
+        "peak_gpu_utilization_percent": 0.0,
+        "max_queue_pressure": 107
+      },
+      "path": "reports/hardware_runs/hitl_resource_max_memory.json"
+    }
+  ]
+}

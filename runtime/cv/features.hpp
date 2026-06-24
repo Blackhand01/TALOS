@@ -6,7 +6,7 @@
 
 namespace talos::runtime::cv {
 
-inline constexpr std::uint32_t kFeatureDim = 7;
+inline constexpr std::uint32_t kFeatureDim = 11;
 
 struct FeatureSummary {
     bool ok;
@@ -18,6 +18,10 @@ struct FeatureSummary {
     float max_value;
     float edge_density;
     float entropy;
+    float saliency_score;
+    float texture_score;
+    float anomaly_score;
+    std::uint32_t detection_count;
     std::uint64_t checksum;
 };
 

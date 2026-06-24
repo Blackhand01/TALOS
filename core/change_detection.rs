@@ -6,6 +6,9 @@ pub struct FeatureEmbedding {
     pub variance: f32,
     pub edge_density: f32,
     pub entropy: f32,
+    pub saliency_score: f32,
+    pub texture_score: f32,
+    pub anomaly_score: f32,
     pub checksum: u64,
     pub input_bytes: u64,
 }
@@ -83,6 +86,9 @@ impl From<&RuntimeResult> for FeatureEmbedding {
             variance: result.variance,
             edge_density: result.edge_density,
             entropy: result.entropy,
+            saliency_score: result.saliency_score,
+            texture_score: result.texture_score,
+            anomaly_score: result.anomaly_score,
             checksum: result.checksum,
             input_bytes: result.input_bytes,
         }
@@ -94,9 +100,19 @@ pub fn embedding_distance(previous: FeatureEmbedding, current: FeatureEmbedding)
     let variance_delta = (previous.variance - current.variance).abs() * 4.0;
     let edge_delta = (previous.edge_density - current.edge_density).abs();
     let entropy_delta = ((previous.entropy - current.entropy).abs() / 8.0).min(1.0);
+    let saliency_delta = (previous.saliency_score - current.saliency_score).abs();
+    let texture_delta = (previous.texture_score - current.texture_score).abs();
+    let anomaly_delta = (previous.anomaly_score - current.anomaly_score).abs();
     let byte_delta = byte_delta_ratio(previous.input_bytes, current.input_bytes) * 0.5;
 
-    mean_delta + variance_delta + edge_delta + entropy_delta + byte_delta
+    mean_delta
+        + variance_delta
+        + edge_delta
+        + entropy_delta
+        + saliency_delta
+        + texture_delta
+        + anomaly_delta
+        + byte_delta
 }
 
 fn byte_delta_ratio(previous: u64, current: u64) -> f32 {
@@ -119,6 +135,9 @@ mod tests {
             variance: 0.01,
             edge_density,
             entropy: 4.0,
+            saliency_score: edge_density,
+            texture_score: edge_density * 0.5,
+            anomaly_score: edge_density * 0.75,
             checksum,
             input_bytes: 1024,
         }

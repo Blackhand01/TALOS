@@ -723,6 +723,10 @@ fn record_decision(
         feature_mean: None,
         feature_entropy: None,
         feature_edge_density: None,
+        feature_saliency_score: None,
+        feature_texture_score: None,
+        feature_anomaly_score: None,
+        feature_detection_count: None,
         change_baseline_ready: None,
         change_score: None,
         change_detected: None,
@@ -732,6 +736,10 @@ fn record_decision(
         vlm_output_tokens: None,
         vlm_confidence: None,
         vlm_answer_code: None,
+        real_model_backend: None,
+        real_model_name: None,
+        real_model_exit_code: None,
+        real_model_peak_cuda_mb: None,
     })
 }
 
@@ -774,6 +782,10 @@ fn execution_observation(
         feature_mean: Some(result.mean),
         feature_entropy: Some(result.entropy),
         feature_edge_density: Some(result.edge_density),
+        feature_saliency_score: Some(result.saliency_score),
+        feature_texture_score: Some(result.texture_score),
+        feature_anomaly_score: Some(result.anomaly_score),
+        feature_detection_count: Some(result.detection_count),
         change_baseline_ready: change_result.map(|result| result.baseline_ready),
         change_score: change_result.map(|result| result.score),
         change_detected: change_result.map(|result| result.changed),
@@ -783,6 +795,10 @@ fn execution_observation(
         vlm_output_tokens: vlm_runtime.map(|(_, tokens, _, _)| tokens),
         vlm_confidence: vlm_runtime.map(|(_, _, confidence, _)| confidence),
         vlm_answer_code: vlm_runtime.map(|(_, _, _, answer_code)| answer_code),
+        real_model_backend: None,
+        real_model_name: None,
+        real_model_exit_code: None,
+        real_model_peak_cuda_mb: None,
     }
 }
 
@@ -823,13 +839,13 @@ fn thermal_task_parts(
             TaskType::CHANGE_DETECTION,
             TaskPriority::MEDIUM,
             128,
-            patterned_frame(index, payload_bytes),
+            inspection_frame(index, payload_bytes),
         ),
         _ => (
             TaskType::CV_FEATURES,
             TaskPriority::HIGH,
             128,
-            patterned_frame(index, payload_bytes),
+            inspection_frame(index, payload_bytes),
         ),
     }
 }
@@ -852,13 +868,13 @@ fn baseline_task_parts(index: usize) -> (TaskType, TaskPriority, u64, Vec<u8>) {
             TaskType::CV_FEATURES,
             TaskPriority::HIGH,
             32,
-            vec![1 + (index % 16) as u8; 4096],
+            inspection_frame(index, 4096),
         ),
         _ => (
             TaskType::CV_FEATURES,
             TaskPriority::MEDIUM,
             32,
-            vec![1 + (index % 16) as u8; 4096],
+            inspection_frame(index, 4096),
         ),
     }
 }
@@ -869,26 +885,25 @@ fn heavy_task_parts(index: usize, payload_bytes: usize) -> (TaskType, TaskPriori
             TaskType::CHANGE_DETECTION,
             TaskPriority::MEDIUM,
             128,
-            patterned_frame(index, payload_bytes),
+            inspection_frame(index, payload_bytes),
         ),
         _ => (
             TaskType::CV_FEATURES,
             TaskPriority::HIGH,
             128,
-            patterned_frame(index, payload_bytes),
+            inspection_frame(index, payload_bytes),
         ),
     }
 }
 
 fn hitl_change_frame(index: usize) -> Vec<u8> {
-    let value = if index < 3 {
-        24
+    if index < 3 {
+        vec![24; 4096]
     } else if index % 4 == 0 {
-        220
+        inspection_frame(index, 4096)
     } else {
-        36
-    };
-    vec![value; 4096]
+        vec![36; 4096]
+    }
 }
 
 fn patterned_frame(index: usize, payload_bytes: usize) -> Vec<u8> {
@@ -896,6 +911,24 @@ fn patterned_frame(index: usize, payload_bytes: usize) -> Vec<u8> {
     for (offset, byte) in frame.iter_mut().enumerate() {
         *byte = ((offset.wrapping_mul(31) + index.wrapping_mul(17)) % 256) as u8;
     }
+    frame
+}
+
+fn inspection_frame(index: usize, payload_bytes: usize) -> Vec<u8> {
+    let mut frame = vec![24 + (index % 16) as u8; payload_bytes];
+    if payload_bytes == 0 {
+        return frame;
+    }
+
+    let cell_count = 64usize;
+    let cell_len = (payload_bytes / cell_count).max(1);
+    let defect_cell = (index.wrapping_mul(19).wrapping_add(11)) % cell_count;
+    let start = defect_cell * cell_len;
+    let end = (start + cell_len).min(payload_bytes);
+    for byte in &mut frame[start..end] {
+        *byte = 232u8.saturating_sub((index % 23) as u8);
+    }
+
     frame
 }
 

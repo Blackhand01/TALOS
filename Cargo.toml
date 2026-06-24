@@ -24,6 +24,10 @@ path = "hitl/baseline.rs"
 name = "jetson_harden"
 path = "deployment/jetson_harden.rs"
 
+[[bin]]
+name = "talos_real_model"
+path = "real_model/main.rs"
+
 [dependencies]
 cxx = "=1.0.128"
 # Compatibility pins for Rust/Cargo 1.83 transitive cxx tooling.

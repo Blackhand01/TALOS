@@ -30,6 +30,10 @@ RuntimeResult run_cv_features(rust::Slice<const std::uint8_t> buffer) {
     result.max_value = features.max_value;
     result.edge_density = features.edge_density;
     result.entropy = features.entropy;
+    result.saliency_score = features.saliency_score;
+    result.texture_score = features.texture_score;
+    result.anomaly_score = features.anomaly_score;
+    result.detection_count = features.detection_count;
     result.checksum = features.checksum;
     result.vlm_output_tokens = 0;
     result.vlm_confidence = 0.0F;
@@ -55,6 +59,10 @@ RuntimeResult run_vlm_query(rust::Slice<const std::uint8_t> buffer) {
     result.max_value = 0.0F;
     result.edge_density = 0.0F;
     result.entropy = 0.0F;
+    result.saliency_score = 0.0F;
+    result.texture_score = 0.0F;
+    result.anomaly_score = 0.0F;
+    result.detection_count = 0;
     result.checksum = query.checksum;
     result.vlm_output_tokens = query.output_tokens;
     result.vlm_confidence = query.confidence;

@@ -269,7 +269,6 @@ CMakeFiles/
 CMakeCache.txt
 cmake_install.cmake
 Makefile
-!Makefile
 install_manifest.txt
 compile_commands.json
 
@@ -315,12 +314,12 @@ target
 
 
 # Altro
+blueprint.md
 dtu_wind_turbine
 data/.DS_Store
 logs/
 .DS_Store
 data/dataset.md
-/Users/stefanoroybisignano/Desktop/TALOS/.vscode
-.vscode/c_cpp_properties.json
-.vscode/launch.json
-.vscode/settings.json
+
+# Local IDE settings
+.vscode/

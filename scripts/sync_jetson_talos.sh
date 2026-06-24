@@ -20,7 +20,9 @@ FILES=(
   evaluation
   hitl
   ipc
+  real_model
   runtime
+  scripts
   tools
 )
 

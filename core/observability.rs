@@ -36,6 +36,10 @@ pub struct TaskObservation {
     pub feature_mean: Option<f32>,
     pub feature_entropy: Option<f32>,
     pub feature_edge_density: Option<f32>,
+    pub feature_saliency_score: Option<f32>,
+    pub feature_texture_score: Option<f32>,
+    pub feature_anomaly_score: Option<f32>,
+    pub feature_detection_count: Option<u32>,
     pub change_baseline_ready: Option<bool>,
     pub change_score: Option<f32>,
     pub change_detected: Option<bool>,
@@ -45,6 +49,10 @@ pub struct TaskObservation {
     pub vlm_output_tokens: Option<u32>,
     pub vlm_confidence: Option<f32>,
     pub vlm_answer_code: Option<u32>,
+    pub real_model_backend: Option<String>,
+    pub real_model_name: Option<String>,
+    pub real_model_exit_code: Option<i32>,
+    pub real_model_peak_cuda_mb: Option<f32>,
 }
 
 #[derive(Debug)]
@@ -71,7 +79,7 @@ impl ObservabilityLogger {
                 if is_empty {
                     writeln!(
                         writer,
-                        "timestamp_ms,trace_id,stage,task_id,task_type,decision,queue_pressure,scheduler_state,telemetry_source,telemetry_valid,memory_usage_percent,temperature_c,gpu_utilization,lease_id,pool_slot_id,latency_ms,execution_time_ms,runtime_ok,feature_dim,input_bytes,feature_checksum,feature_mean,feature_entropy,feature_edge_density,change_baseline_ready,change_score,change_detected,vlm_model,vlm_quantization_bits,vlm_gate_reason,vlm_output_tokens,vlm_confidence,vlm_answer_code"
+                        "timestamp_ms,trace_id,stage,task_id,task_type,decision,queue_pressure,scheduler_state,telemetry_source,telemetry_valid,memory_usage_percent,temperature_c,gpu_utilization,lease_id,pool_slot_id,latency_ms,execution_time_ms,runtime_ok,feature_dim,input_bytes,feature_checksum,feature_mean,feature_entropy,feature_edge_density,feature_saliency_score,feature_texture_score,feature_anomaly_score,feature_detection_count,change_baseline_ready,change_score,change_detected,vlm_model,vlm_quantization_bits,vlm_gate_reason,vlm_output_tokens,vlm_confidence,vlm_answer_code,real_model_backend,real_model_name,real_model_exit_code,real_model_peak_cuda_mb"
                     )?;
                 }
                 Some(writer)
@@ -103,7 +111,7 @@ impl TaskObservation {
 
     fn to_json_line(&self, timestamp_ms: u128) -> String {
         format!(
-            "{{\"timestamp_ms\":{},\"trace_id\":\"{}\",\"stage\":\"{}\",\"task_id\":{},\"task_type\":\"{}\",\"decision\":\"{}\",\"queue_pressure\":{},\"scheduler_state\":\"{}\",\"telemetry_source\":\"{}\",\"telemetry_valid\":{},\"memory_usage_percent\":{},\"temperature_c\":{},\"gpu_utilization\":{},\"lease_id\":{},\"pool_slot_id\":{},\"latency_ms\":{},\"execution_time_ms\":{},\"runtime_ok\":{},\"feature_dim\":{},\"input_bytes\":{},\"feature_checksum\":{},\"feature_mean\":{},\"feature_entropy\":{},\"feature_edge_density\":{},\"change_baseline_ready\":{},\"change_score\":{},\"change_detected\":{},\"vlm_model\":{},\"vlm_quantization_bits\":{},\"vlm_gate_reason\":{},\"vlm_output_tokens\":{},\"vlm_confidence\":{},\"vlm_answer_code\":{}}}",
+            "{{\"timestamp_ms\":{},\"trace_id\":\"{}\",\"stage\":\"{}\",\"task_id\":{},\"task_type\":\"{}\",\"decision\":\"{}\",\"queue_pressure\":{},\"scheduler_state\":\"{}\",\"telemetry_source\":\"{}\",\"telemetry_valid\":{},\"memory_usage_percent\":{},\"temperature_c\":{},\"gpu_utilization\":{},\"lease_id\":{},\"pool_slot_id\":{},\"latency_ms\":{},\"execution_time_ms\":{},\"runtime_ok\":{},\"feature_dim\":{},\"input_bytes\":{},\"feature_checksum\":{},\"feature_mean\":{},\"feature_entropy\":{},\"feature_edge_density\":{},\"feature_saliency_score\":{},\"feature_texture_score\":{},\"feature_anomaly_score\":{},\"feature_detection_count\":{},\"change_baseline_ready\":{},\"change_score\":{},\"change_detected\":{},\"vlm_model\":{},\"vlm_quantization_bits\":{},\"vlm_gate_reason\":{},\"vlm_output_tokens\":{},\"vlm_confidence\":{},\"vlm_answer_code\":{},\"real_model_backend\":{},\"real_model_name\":{},\"real_model_exit_code\":{},\"real_model_peak_cuda_mb\":{}}}",
             timestamp_ms,
             self.trace_id(),
             stage_name(&self.stage),
@@ -128,6 +136,10 @@ impl TaskObservation {
             optional_json_f32(self.feature_mean),
             optional_json_f32(self.feature_entropy),
             optional_json_f32(self.feature_edge_density),
+            optional_json_f32(self.feature_saliency_score),
+            optional_json_f32(self.feature_texture_score),
+            optional_json_f32(self.feature_anomaly_score),
+            optional_json_u32(self.feature_detection_count),
             optional_json_bool(self.change_baseline_ready),
             optional_json_f32(self.change_score),
             optional_json_bool(self.change_detected),
@@ -136,13 +148,17 @@ impl TaskObservation {
             optional_json_string(self.vlm_gate_reason.as_deref()),
             optional_json_u32(self.vlm_output_tokens),
             optional_json_f32(self.vlm_confidence),
-            optional_json_u32(self.vlm_answer_code)
+            optional_json_u32(self.vlm_answer_code),
+            optional_json_string(self.real_model_backend.as_deref()),
+            optional_json_string(self.real_model_name.as_deref()),
+            optional_json_i32(self.real_model_exit_code),
+            optional_json_f32(self.real_model_peak_cuda_mb)
         )
     }
 
     fn to_csv_line(&self, timestamp_ms: u128) -> String {
         format!(
-            "{},{},{},{},{},{},{},{},{},{},{:.3},{:.3},{:.3},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{}",
+            "{},{},{},{},{},{},{},{},{},{},{:.3},{:.3},{:.3},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{}",
             timestamp_ms,
             self.trace_id(),
             stage_name(&self.stage),
@@ -183,6 +199,18 @@ impl TaskObservation {
             self.feature_edge_density
                 .map(|value| format!("{value:.6}"))
                 .unwrap_or_default(),
+            self.feature_saliency_score
+                .map(|value| format!("{value:.6}"))
+                .unwrap_or_default(),
+            self.feature_texture_score
+                .map(|value| format!("{value:.6}"))
+                .unwrap_or_default(),
+            self.feature_anomaly_score
+                .map(|value| format!("{value:.6}"))
+                .unwrap_or_default(),
+            self.feature_detection_count
+                .map(|value| value.to_string())
+                .unwrap_or_default(),
             self.change_baseline_ready
                 .map(|value| value.to_string())
                 .unwrap_or_default(),
@@ -205,6 +233,14 @@ impl TaskObservation {
                 .unwrap_or_default(),
             self.vlm_answer_code
                 .map(|value| value.to_string())
+                .unwrap_or_default(),
+            self.real_model_backend.as_deref().unwrap_or(""),
+            self.real_model_name.as_deref().unwrap_or(""),
+            self.real_model_exit_code
+                .map(|value| value.to_string())
+                .unwrap_or_default(),
+            self.real_model_peak_cuda_mb
+                .map(|value| format!("{value:.3}"))
                 .unwrap_or_default()
         )
     }
@@ -241,6 +277,12 @@ fn optional_json_u64(value: Option<u64>) -> String {
 }
 
 fn optional_json_u32(value: Option<u32>) -> String {
+    value
+        .map(|value| value.to_string())
+        .unwrap_or_else(|| "null".to_string())
+}
+
+fn optional_json_i32(value: Option<i32>) -> String {
     value
         .map(|value| value.to_string())
         .unwrap_or_else(|| "null".to_string())
@@ -334,12 +376,16 @@ mod tests {
                 latency_ms: Some(3),
                 execution_time_ms: 4,
                 runtime_ok: Some(true),
-                feature_dim: Some(7),
+                feature_dim: Some(11),
                 input_bytes: Some(4),
                 feature_checksum: Some(123),
                 feature_mean: Some(0.5),
                 feature_entropy: Some(2.0),
                 feature_edge_density: Some(0.25),
+                feature_saliency_score: Some(0.33),
+                feature_texture_score: Some(0.21),
+                feature_anomaly_score: Some(0.42),
+                feature_detection_count: Some(3),
                 change_baseline_ready: Some(true),
                 change_score: Some(0.12),
                 change_detected: Some(true),
@@ -349,6 +395,10 @@ mod tests {
                 vlm_output_tokens: Some(16),
                 vlm_confidence: Some(0.74),
                 vlm_answer_code: Some(42),
+                real_model_backend: Some("tensorrt-engine".to_string()),
+                real_model_name: Some("vision.engine".to_string()),
+                real_model_exit_code: Some(0),
+                real_model_peak_cuda_mb: Some(512.0),
             })
             .expect("observation should write");
 
@@ -357,7 +407,11 @@ mod tests {
         assert!(json.contains("\"task_type\":\"CV_FEATURES\""));
         assert!(json.contains("\"lease_id\":\"0001\""));
         assert!(json.contains("\"pool_slot_id\":2"));
-        assert!(json.contains("\"feature_dim\":7"));
+        assert!(json.contains("\"feature_dim\":11"));
+        assert!(json.contains("\"feature_anomaly_score\":0.420000"));
+        assert!(json.contains("\"feature_detection_count\":3"));
+        assert!(json.contains("\"real_model_backend\":\"tensorrt-engine\""));
+        assert!(json.contains("\"real_model_peak_cuda_mb\":512.000000"));
         assert!(json.contains("\"feature_checksum\":123"));
         assert!(json.contains("\"runtime_ok\":true"));
         assert!(json.contains("\"telemetry_source\":\"synthetic\""));

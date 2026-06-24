@@ -226,6 +226,10 @@ async fn run_benchmark(args: Args) -> Result<(), Box<dyn std::error::Error>> {
                         feature_mean: Some(result.mean),
                         feature_entropy: Some(result.entropy),
                         feature_edge_density: Some(result.edge_density),
+                        feature_saliency_score: Some(result.saliency_score),
+                        feature_texture_score: Some(result.texture_score),
+                        feature_anomaly_score: Some(result.anomaly_score),
+                        feature_detection_count: Some(result.detection_count),
                         change_baseline_ready: change_result.map(|result| result.baseline_ready),
                         change_score: change_result.map(|result| result.score),
                         change_detected: change_result.map(|result| result.changed),
@@ -237,6 +241,10 @@ async fn run_benchmark(args: Args) -> Result<(), Box<dyn std::error::Error>> {
                         vlm_output_tokens: vlm_runtime.map(|(_, tokens, _, _)| tokens),
                         vlm_confidence: vlm_runtime.map(|(_, _, confidence, _)| confidence),
                         vlm_answer_code: vlm_runtime.map(|(_, _, _, answer_code)| answer_code),
+                        real_model_backend: None,
+                        real_model_name: None,
+                        real_model_exit_code: None,
+                        real_model_peak_cuda_mb: None,
                     })?;
                 } else {
                     stats.deferred += 1;
@@ -327,6 +335,10 @@ fn record_decision(
         feature_mean: None,
         feature_entropy: None,
         feature_edge_density: None,
+        feature_saliency_score: None,
+        feature_texture_score: None,
+        feature_anomaly_score: None,
+        feature_detection_count: None,
         change_baseline_ready: None,
         change_score: None,
         change_detected: None,
@@ -336,6 +348,10 @@ fn record_decision(
         vlm_output_tokens: None,
         vlm_confidence: None,
         vlm_answer_code: None,
+        real_model_backend: None,
+        real_model_name: None,
+        real_model_exit_code: None,
+        real_model_peak_cuda_mb: None,
     })
 }
 
@@ -588,6 +604,10 @@ fn decision_observation(
         feature_mean: None,
         feature_entropy: None,
         feature_edge_density: None,
+        feature_saliency_score: None,
+        feature_texture_score: None,
+        feature_anomaly_score: None,
+        feature_detection_count: None,
         change_baseline_ready: None,
         change_score: None,
         change_detected: None,
@@ -597,6 +617,10 @@ fn decision_observation(
         vlm_output_tokens: None,
         vlm_confidence: None,
         vlm_answer_code: None,
+        real_model_backend: None,
+        real_model_name: None,
+        real_model_exit_code: None,
+        real_model_peak_cuda_mb: None,
     }
 }
 
@@ -638,6 +662,10 @@ fn execution_observation(
         feature_mean: Some(result.mean),
         feature_entropy: Some(result.entropy),
         feature_edge_density: Some(result.edge_density),
+        feature_saliency_score: Some(result.saliency_score),
+        feature_texture_score: Some(result.texture_score),
+        feature_anomaly_score: Some(result.anomaly_score),
+        feature_detection_count: Some(result.detection_count),
         change_baseline_ready: change_result.map(|result| result.baseline_ready),
         change_score: change_result.map(|result| result.score),
         change_detected: change_result.map(|result| result.changed),
@@ -647,6 +675,10 @@ fn execution_observation(
         vlm_output_tokens: vlm_runtime.map(|(_, tokens, _, _)| tokens),
         vlm_confidence: vlm_runtime.map(|(_, _, confidence, _)| confidence),
         vlm_answer_code: vlm_runtime.map(|(_, _, _, answer_code)| answer_code),
+        real_model_backend: None,
+        real_model_name: None,
+        real_model_exit_code: None,
+        real_model_peak_cuda_mb: None,
     }
 }
 
@@ -691,7 +723,7 @@ fn synthetic_task(mode: StressMode, index: usize) -> TaskRequest {
         StressMode::Phase8Optimization => match task_type {
             TaskType::CHANGE_DETECTION => synthetic_change_frame(index),
             TaskType::VLM_QUERY => vec![64 + (index % 32) as u8; 4096],
-            TaskType::CV_FEATURES => vec![1 + (index % 16) as u8; 4096],
+            TaskType::CV_FEATURES => synthetic_inspection_frame(index, 4096),
         },
         _ => vec![1; 1024],
     };
@@ -775,7 +807,7 @@ fn phase6_task(index: usize) -> TaskRequest {
     let frame = match task_type {
         TaskType::CHANGE_DETECTION => synthetic_change_frame(index),
         TaskType::VLM_QUERY => vec![48 + (index % 64) as u8; 2048],
-        TaskType::CV_FEATURES => vec![1 + (index % 8) as u8; 2048],
+        TaskType::CV_FEATURES => synthetic_inspection_frame(index, 2048),
     };
 
     TaskRequest {
@@ -794,14 +826,31 @@ fn phase6_task(index: usize) -> TaskRequest {
 }
 
 fn synthetic_change_frame(index: usize) -> Vec<u8> {
-    let value = if index < 2 {
-        16
+    if index < 2 {
+        vec![16; 1024]
     } else if index % 3 == 0 {
-        220
+        synthetic_inspection_frame(index, 1024)
     } else {
-        32
-    };
-    vec![value; 1024]
+        vec![32; 1024]
+    }
+}
+
+fn synthetic_inspection_frame(index: usize, len: usize) -> Vec<u8> {
+    let mut frame = vec![18 + (index % 8) as u8; len];
+    if len == 0 {
+        return frame;
+    }
+
+    let cell_count = 64usize;
+    let cell_len = (len / cell_count).max(1);
+    let defect_cell = (index.wrapping_mul(13).wrapping_add(7)) % cell_count;
+    let start = defect_cell * cell_len;
+    let end = (start + cell_len).min(len);
+    for byte in &mut frame[start..end] {
+        *byte = 230u8.saturating_sub((index % 17) as u8);
+    }
+
+    frame
 }
 
 fn deterministic_bucket(index: usize) -> usize {

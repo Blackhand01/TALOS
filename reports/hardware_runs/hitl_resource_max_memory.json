@@ -1,0 +1,42 @@
+{
+  "run_id": "hitl_resource_max_memory",
+  "label": "HITL RAM and queue pressure, Orin Nano",
+  "profile": "HITL",
+  "source": "Jetson Orin Nano run pasted from terminal, 2026-06-24 17:05 Europe/Rome",
+  "notes": "TALOS thermal workload plus CPU burn and guarded memory pressure. This run proves real admission control under memory and queue pressure; it does not stress GR3D.",
+  "hardware": {
+    "device": "NVIDIA Jetson Orin Nano 8GB",
+    "power_mode": "15W profile observed in prior hardening status"
+  },
+  "config": {
+    "telemetry": "sysfs plus tegrastats side channel",
+    "duration_secs": 120,
+    "memory_pressure_mb": 4608,
+    "cpu_burn_threads": 6,
+    "cuda_burn": false
+  },
+  "summary": {
+    "completed_tasks": 640,
+    "admitted": 533,
+    "deferred": 107,
+    "rejected": 0,
+    "executed": 533,
+    "high_load_samples": 519,
+    "throttle_samples": 0,
+    "degraded_samples": 0,
+    "vlm_admitted": 0,
+    "vlm_deferred": 107,
+    "vlm_rejected": 0,
+    "vlm_thermal_pressure_deferrals": 0,
+    "vlm_memory_pressure_decisions": 21,
+    "execution_time_ms_p50": 173,
+    "execution_time_ms_p95": 212,
+    "runtime_latency_ms_p50": 171,
+    "runtime_latency_ms_p95": 211,
+    "throughput_tps": 4.438,
+    "peak_memory_percent": 82.948,
+    "peak_temperature_c": 53.593,
+    "peak_gpu_utilization_percent": 0.0,
+    "max_queue_pressure": 107
+  }
+}
