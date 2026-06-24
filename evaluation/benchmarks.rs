@@ -4,11 +4,11 @@ use std::time::{Duration, Instant};
 
 use talos::executor::dispatch_to_cpp;
 use talos::{
-    default_csv_path, default_jsonl_path, AdmissionController, ChangeDetectionResult,
-    ChangeDetector, DecisionStatus, FeatureEmbedding, GpuLeaseManager, ObservabilityLogger,
-    ObservationStage, SchedulerState, StateMachine, SystemTelemetry, TaskObservation, TaskPriority,
-    TaskRequest, TaskScheduler, TaskType, TelemetrySource, ThermalStressSimulator, VlmGateDecision,
-    VlmRuntimeMetadata,
+    percentile_u64, AdmissionController, ChangeDetectionResult, ChangeDetector, DecisionStatus,
+    FeatureEmbedding, GpuLeaseManager, ObservabilityLogger, ObservationStage, OptimizationMetrics,
+    OptimizationProfile, SchedulerState, StateMachine, SystemTelemetry, TaskObservation,
+    TaskPriority, TaskRequest, TaskScheduler, TaskType, TelemetrySource, ThermalStressSimulator,
+    VlmGateDecision, VlmRuntimeMetadata,
 };
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -20,6 +20,7 @@ enum StressMode {
     ChangeDetection,
     VlmQuery,
     Phase6Contention,
+    Phase8Optimization,
 }
 
 #[derive(Debug)]
@@ -42,8 +43,36 @@ struct BenchStats {
     high_load_samples: usize,
     throttle_samples: usize,
     degraded_samples: usize,
+    peak_memory_percent: f32,
+    peak_temperature_c: f32,
+    max_queue_pressure: u32,
     execution_times_ms: Vec<u64>,
     runtime_latencies_ms: Vec<u64>,
+}
+
+impl BenchStats {
+    fn observe_pressure(&mut self, telemetry: SystemTelemetry, queue_pressure: u32) {
+        self.peak_memory_percent = self.peak_memory_percent.max(telemetry.memory_usage_percent);
+        self.peak_temperature_c = self.peak_temperature_c.max(telemetry.temperature_c);
+        self.max_queue_pressure = self.max_queue_pressure.max(queue_pressure);
+    }
+
+    fn optimization_metrics(&self, tasks: usize, elapsed: Duration) -> OptimizationMetrics {
+        OptimizationMetrics {
+            tasks,
+            elapsed_ms: elapsed.as_millis(),
+            admitted: self.admitted,
+            deferred: self.deferred,
+            rejected: self.rejected,
+            executed: self.executed,
+            execution_p50_ms: percentile_u64(&self.execution_times_ms, 50),
+            execution_p95_ms: percentile_u64(&self.execution_times_ms, 95),
+            runtime_p95_ms: percentile_u64(&self.runtime_latencies_ms, 95),
+            peak_memory_percent: self.peak_memory_percent,
+            peak_temperature_c: self.peak_temperature_c,
+            max_queue_pressure: self.max_queue_pressure,
+        }
+    }
 }
 
 #[tokio::main]
@@ -59,8 +88,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 fn parse_args() -> Result<Args, Box<dyn std::error::Error>> {
     let mut mode = StressMode::CvFlood;
     let mut tasks = 100usize;
-    let mut log_jsonl = default_jsonl_path();
-    let mut log_csv = Some(default_csv_path());
+    let mut log_jsonl = sitl_jsonl_path(mode);
+    let mut log_csv = Some(sitl_csv_path(mode));
     let mut args = std::env::args().skip(1);
 
     while let Some(arg) = args.next() {
@@ -68,8 +97,8 @@ fn parse_args() -> Result<Args, Box<dyn std::error::Error>> {
             "--mode" => {
                 let value = args.next().ok_or("--mode requires a value")?;
                 mode = parse_mode(&value)?;
-                log_jsonl = PathBuf::from(format!("logs/bench-{}.jsonl", mode_name(mode)));
-                log_csv = Some(PathBuf::from(format!("logs/bench-{}.csv", mode_name(mode))));
+                log_jsonl = sitl_jsonl_path(mode);
+                log_csv = Some(sitl_csv_path(mode));
             }
             "--tasks" => {
                 let value = args.next().ok_or("--tasks requires a value")?;
@@ -87,9 +116,7 @@ fn parse_args() -> Result<Args, Box<dyn std::error::Error>> {
                 log_csv = None;
             }
             "--help" | "-h" => {
-                println!(
-                    "Usage: talos_bench [--mode cv-flood|vlm-burst|thermal-spike|mixed-contention|change-detection|vlm-query|phase6-contention] [--tasks N] [--log-jsonl PATH] [--log-csv PATH] [--no-csv]"
-                );
+                println!("Usage: talos_bench [--mode cv-flood|vlm-burst|thermal-spike|mixed-contention|change-detection|vlm-query|phase6-contention|phase8-optimization] [--tasks N] [--log-jsonl PATH] [--log-csv PATH] [--no-csv]");
                 std::process::exit(0);
             }
             other => return Err(format!("unknown argument: {other}").into()),
@@ -118,6 +145,7 @@ async fn run_benchmark(args: Args) -> Result<(), Box<dyn std::error::Error>> {
         let task = synthetic_task(args.mode, index);
         let telemetry = synthetic_telemetry(args.mode, index, args.tasks);
         let queue_pressure = scheduler.queue_pressure();
+        stats.observe_pressure(telemetry, queue_pressure);
         let state = state_machine.evaluate(&telemetry, queue_pressure);
         let vlm_gate = if task.task_type == TaskType::VLM_QUERY {
             Some(admission.vlm_gate_decision(
@@ -331,6 +359,10 @@ async fn run_phase6_contention(args: Args) -> Result<(), Box<dyn std::error::Err
         let telemetry = simulator.tick(lease_manager.is_active(), index % 2 == 0);
         let queue_pressure = scheduler.queue_pressure();
         let state = state_machine.evaluate(&telemetry, queue_pressure);
+        stats
+            .lock()
+            .expect("stats mutex poisoned")
+            .observe_pressure(telemetry, queue_pressure);
         record_state_sample(&stats, state);
 
         let vlm_gate = if task.task_type == TaskType::VLM_QUERY {
@@ -644,12 +676,23 @@ fn synthetic_task(mode: StressMode, index: usize) -> TaskRequest {
         StressMode::ChangeDetection => (TaskType::CHANGE_DETECTION, TaskPriority::MEDIUM, 64),
         StressMode::VlmQuery => (TaskType::VLM_QUERY, TaskPriority::LOW, 2_304),
         StressMode::Phase6Contention => unreachable!("phase6-contention uses phase6_task"),
+        StressMode::Phase8Optimization => match deterministic_bucket(index) {
+            0 => (TaskType::CV_FEATURES, TaskPriority::HIGH, 32),
+            1 => (TaskType::CHANGE_DETECTION, TaskPriority::MEDIUM, 64),
+            2 => (TaskType::CV_FEATURES, TaskPriority::LOW, 32),
+            _ => (TaskType::VLM_QUERY, TaskPriority::LOW, 2_304),
+        },
     };
 
     let frame = match mode {
         StressMode::ChangeDetection => synthetic_change_frame(index),
         StressMode::VlmQuery => vec![32 + (index % 64) as u8; 1024],
         StressMode::Phase6Contention => unreachable!("phase6-contention uses phase6_task"),
+        StressMode::Phase8Optimization => match task_type {
+            TaskType::CHANGE_DETECTION => synthetic_change_frame(index),
+            TaskType::VLM_QUERY => vec![64 + (index % 32) as u8; 4096],
+            TaskType::CV_FEATURES => vec![1 + (index % 16) as u8; 4096],
+        },
         _ => vec![1; 1024],
     };
 
@@ -701,6 +744,23 @@ fn synthetic_telemetry(mode: StressMode, index: usize, tasks: usize) -> SystemTe
         StressMode::ChangeDetection => SystemTelemetry::nominal(),
         StressMode::VlmQuery => SystemTelemetry::nominal(),
         StressMode::Phase6Contention => SystemTelemetry::nominal(),
+        StressMode::Phase8Optimization => {
+            let memory_usage_percent = if index % 13 == 0 {
+                83.0
+            } else {
+                56.0 + (index % 10) as f32
+            };
+            let temperature_c = if index > tasks / 2 {
+                70.0 + (index % 12) as f32
+            } else {
+                58.0 + (index % 8) as f32
+            };
+            SystemTelemetry {
+                memory_usage_percent,
+                temperature_c,
+                gpu_utilization: 72.0,
+            }
+        }
     }
 }
 
@@ -757,6 +817,7 @@ fn mode_delay(mode: StressMode) -> Option<Duration> {
         StressMode::ChangeDetection => Some(Duration::from_millis(40)),
         StressMode::VlmQuery => Some(Duration::from_millis(100)),
         StressMode::Phase6Contention => Some(Duration::from_millis(10)),
+        StressMode::Phase8Optimization => Some(Duration::from_millis(15)),
     }
 }
 
@@ -769,6 +830,7 @@ fn parse_mode(value: &str) -> Result<StressMode, Box<dyn std::error::Error>> {
         "change-detection" => Ok(StressMode::ChangeDetection),
         "vlm-query" => Ok(StressMode::VlmQuery),
         "phase6-contention" => Ok(StressMode::Phase6Contention),
+        "phase8-optimization" => Ok(StressMode::Phase8Optimization),
         other => Err(format!("unknown mode: {other}").into()),
     }
 }
@@ -782,10 +844,23 @@ fn mode_name(mode: StressMode) -> &'static str {
         StressMode::ChangeDetection => "change-detection",
         StressMode::VlmQuery => "vlm-query",
         StressMode::Phase6Contention => "phase6-contention",
+        StressMode::Phase8Optimization => "phase8-optimization",
     }
 }
 
+fn sitl_jsonl_path(mode: StressMode) -> PathBuf {
+    PathBuf::from(format!("logs/sitl-{}.jsonl", mode_name(mode)))
+}
+
+fn sitl_csv_path(mode: StressMode) -> PathBuf {
+    PathBuf::from(format!("logs/sitl-{}.csv", mode_name(mode)))
+}
+
 fn print_summary(mode: StressMode, tasks: usize, elapsed: Duration, stats: &BenchStats) {
+    let metrics = stats.optimization_metrics(tasks, elapsed);
+    let profile = OptimizationProfile::default();
+    let recommendations = metrics.recommend(profile);
+
     println!("mode={}", mode_name(mode));
     println!("tasks={tasks}");
     println!("elapsed_ms={}", elapsed.as_millis());
@@ -804,25 +879,32 @@ fn print_summary(mode: StressMode, tasks: usize, elapsed: Duration, stats: &Benc
     );
     println!(
         "execution_time_ms_p50={} execution_time_ms_p95={}",
-        percentile(&stats.execution_times_ms, 50),
-        percentile(&stats.execution_times_ms, 95)
+        metrics.execution_p50_ms, metrics.execution_p95_ms
     );
     println!(
         "runtime_latency_ms_p50={} runtime_latency_ms_p95={}",
-        percentile(&stats.runtime_latencies_ms, 50),
-        percentile(&stats.runtime_latencies_ms, 95)
+        percentile_u64(&stats.runtime_latencies_ms, 50),
+        metrics.runtime_p95_ms
     );
-}
-
-fn percentile(values: &[u64], percentile: usize) -> u64 {
-    if values.is_empty() {
-        return 0;
-    }
-
-    let mut sorted = values.to_vec();
-    sorted.sort_unstable();
-    let index = ((sorted.len() - 1) * percentile) / 100;
-    sorted[index]
+    println!(
+        "throughput_tps={:.3} admission_rate={:.3} defer_rate={:.3} reject_rate={:.3}",
+        metrics.throughput_tps(),
+        metrics.admission_rate(),
+        metrics.defer_rate(),
+        metrics.reject_rate()
+    );
+    println!(
+        "peak_memory_percent={:.3} peak_temperature_c={:.3} max_queue_pressure={}",
+        metrics.peak_memory_percent, metrics.peak_temperature_c, metrics.max_queue_pressure
+    );
+    println!(
+        "optimization_recommendations={}",
+        recommendations
+            .iter()
+            .map(|recommendation| recommendation.as_str())
+            .collect::<Vec<_>>()
+            .join(",")
+    );
 }
 
 fn elapsed_execution_ms(started: Instant) -> u64 {

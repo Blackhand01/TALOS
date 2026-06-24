@@ -16,6 +16,14 @@ path = "edge_node/main.rs"
 name = "talos_bench"
 path = "evaluation/benchmarks.rs"
 
+[[bin]]
+name = "talos_hitl"
+path = "hitl/baseline.rs"
+
+[[bin]]
+name = "jetson_harden"
+path = "deployment/jetson_harden.rs"
+
 [dependencies]
 cxx = "=1.0.128"
 # Compatibility pins for Rust/Cargo 1.83 transitive cxx tooling.

@@ -1,4 +1,6 @@
-use std::process::Command;
+use std::fs;
+use std::process::{Command, Stdio};
+use std::thread;
 use std::time::Duration;
 
 use tokio::task;
@@ -11,6 +13,7 @@ pub const TELEMETRY_PERIOD: Duration = Duration::from_millis(100);
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum TelemetrySource {
     Synthetic,
+    Sysfs,
     Tegrastats,
     Jtop,
 }
@@ -36,6 +39,7 @@ impl TelemetrySource {
     pub fn parse(value: &str) -> Option<Self> {
         match value {
             "synthetic" => Some(Self::Synthetic),
+            "sysfs" => Some(Self::Sysfs),
             "tegrastats" => Some(Self::Tegrastats),
             "jtop" => Some(Self::Jtop),
             _ => None,
@@ -45,6 +49,7 @@ impl TelemetrySource {
     pub const fn name(self) -> &'static str {
         match self {
             Self::Synthetic => "synthetic",
+            Self::Sysfs => "sysfs",
             Self::Tegrastats => "tegrastats",
             Self::Jtop => "jtop",
         }
@@ -101,6 +106,7 @@ async fn sample_source(source: TelemetrySource) -> TelemetrySample {
             source,
             valid: true,
         },
+        TelemetrySource::Sysfs => command_sample(source, sample_sysfs).await,
         TelemetrySource::Tegrastats => command_sample(source, sample_tegrastats).await,
         TelemetrySource::Jtop => command_sample(source, sample_jtop).await,
     }
@@ -124,13 +130,34 @@ async fn command_sample(
     }
 }
 
+fn sample_sysfs() -> Option<SystemTelemetry> {
+    const THERMAL_ZONE0_TEMP: &str = "/sys/class/thermal/thermal_zone0/temp";
+    const PROC_MEMINFO: &str = "/proc/meminfo";
+
+    let temperature_raw = fs::read_to_string(THERMAL_ZONE0_TEMP).ok()?;
+    let meminfo = fs::read_to_string(PROC_MEMINFO).ok()?;
+
+    Some(SystemTelemetry {
+        memory_usage_percent: parse_meminfo_percent(&meminfo)?,
+        temperature_c: parse_millidegree_temperature(&temperature_raw)?,
+        gpu_utilization: 0.0,
+    })
+}
+
 fn sample_tegrastats() -> Option<SystemTelemetry> {
-    let output = Command::new("tegrastats")
-        .args(["--interval", "100", "--count", "1"])
-        .output()
+    let mut child = Command::new("tegrastats")
+        .args(["--interval", "100"])
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
         .ok()?;
 
-    if !output.status.success() {
+    thread::sleep(Duration::from_millis(350));
+
+    let _ = child.kill();
+    let output = child.wait_with_output().ok()?;
+
+    if output.stdout.is_empty() {
         return None;
     }
 
@@ -188,6 +215,29 @@ pub fn parse_jtop_json(json: &str) -> Option<SystemTelemetry> {
         memory_usage_percent: parse_json_number(json, "memory_usage_percent")?,
         temperature_c: parse_json_number(json, "temperature_c")?,
         gpu_utilization: parse_json_number(json, "gpu_utilization")?,
+    })
+}
+
+pub fn parse_millidegree_temperature(raw: &str) -> Option<f32> {
+    let millidegrees: f32 = raw.trim().parse().ok()?;
+    Some(millidegrees / 1000.0)
+}
+
+pub fn parse_meminfo_percent(meminfo: &str) -> Option<f32> {
+    let total_kb = parse_meminfo_kb(meminfo, "MemTotal:")?;
+    let available_kb = parse_meminfo_kb(meminfo, "MemAvailable:")?;
+
+    if total_kb <= 0.0 || available_kb > total_kb {
+        return None;
+    }
+
+    Some(((total_kb - available_kb) / total_kb) * 100.0)
+}
+
+fn parse_meminfo_kb(meminfo: &str, label: &str) -> Option<f32> {
+    meminfo.lines().find_map(|line| {
+        let value = line.strip_prefix(label)?.split_whitespace().next()?;
+        value.parse().ok()
     })
 }
 
@@ -265,6 +315,27 @@ mod tests {
         let monitor = SyntheticTelemetryMonitor::new_10hz();
         assert_eq!(monitor.period(), Duration::from_millis(100));
         assert_eq!(monitor.source(), TelemetrySource::Synthetic);
+    }
+
+    #[test]
+    fn parses_sysfs_source() {
+        assert_eq!(
+            TelemetrySource::parse("sysfs"),
+            Some(TelemetrySource::Sysfs)
+        );
+    }
+
+    #[test]
+    fn parses_sysfs_millidegrees_celsius() {
+        assert_eq!(parse_millidegree_temperature("49375\n"), Some(49.375));
+    }
+
+    #[test]
+    fn parses_proc_meminfo_percent() {
+        let meminfo = "MemTotal:        8000000 kB\nMemFree:         1000000 kB\nMemAvailable:   6000000 kB\n";
+        let percent = parse_meminfo_percent(meminfo).expect("meminfo should parse");
+
+        assert!((percent - 25.0).abs() < f32::EPSILON);
     }
 
     #[test]

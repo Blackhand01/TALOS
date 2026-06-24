@@ -6,9 +6,9 @@ use std::time::Instant;
 use talos::executor::dispatch_to_cpp;
 use talos::{
     default_csv_path, default_jsonl_path, AdmissionController, ChangeDetector, DecisionStatus,
-    FeatureEmbedding, GpuLeaseManager, MockFrameIngestor, ObservabilityLogger, ObservationStage,
-    SchedulerState, StateMachine, SystemTelemetry, TaskObservation, TaskPriority, TaskRequest,
-    TaskScheduler, TaskType, TelemetryMonitor, TelemetrySource, VlmGateDecision,
+    ExecutionProfile, FeatureEmbedding, GpuLeaseManager, MockFrameIngestor, ObservabilityLogger,
+    ObservationStage, SchedulerState, StateMachine, SystemTelemetry, TaskObservation, TaskPriority,
+    TaskRequest, TaskScheduler, TaskType, TelemetryMonitor, TelemetrySource, VlmGateDecision,
     VlmRuntimeMetadata,
 };
 use tokio::sync::mpsc;
@@ -20,6 +20,7 @@ struct Args {
     max_tasks: usize,
     log_jsonl: PathBuf,
     log_csv: Option<PathBuf>,
+    profile: ExecutionProfile,
     telemetry_source: TelemetrySource,
     workload: WorkloadMode,
 }
@@ -40,6 +41,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         args.max_tasks,
         args.log_jsonl,
         args.log_csv,
+        args.profile,
         args.telemetry_source,
         args.workload,
     )
@@ -51,7 +53,9 @@ fn parse_args() -> Result<Args, Box<dyn std::error::Error>> {
     let mut max_tasks = 3usize;
     let mut log_jsonl = default_jsonl_path();
     let mut log_csv = Some(default_csv_path());
+    let mut profile = ExecutionProfile::Sitl;
     let mut telemetry_source = TelemetrySource::Synthetic;
+    let mut telemetry_overridden = false;
     let mut workload = WorkloadMode::Cv;
     let mut args = std::env::args().skip(1);
 
@@ -76,10 +80,15 @@ fn parse_args() -> Result<Args, Box<dyn std::error::Error>> {
             "--no-csv" => {
                 log_csv = None;
             }
+            "--profile" => {
+                let value = args.next().ok_or("--profile requires a profile")?;
+                profile = ExecutionProfile::parse(&value).ok_or("profile must be sitl or hitl")?;
+            }
             "--telemetry" => {
                 let value = args.next().ok_or("--telemetry requires a source")?;
                 telemetry_source = TelemetrySource::parse(&value)
-                    .ok_or("telemetry source must be synthetic, tegrastats, or jtop")?;
+                    .ok_or("telemetry source must be synthetic, sysfs, tegrastats, or jtop")?;
+                telemetry_overridden = true;
             }
             "--workload" => {
                 let value = args.next().ok_or("--workload requires a mode")?;
@@ -88,7 +97,7 @@ fn parse_args() -> Result<Args, Box<dyn std::error::Error>> {
             }
             "--help" | "-h" => {
                 println!(
-                    "Usage: edge_node [--demo-dtu PATH] [--max-tasks N] [--log-jsonl PATH] [--log-csv PATH] [--no-csv] [--telemetry synthetic|tegrastats|jtop] [--workload cv|change-detection|vlm|alternating]"
+                    "Usage: edge_node [--demo-dtu PATH] [--max-tasks N] [--log-jsonl PATH] [--log-csv PATH] [--no-csv] [--profile sitl|hitl] [--telemetry synthetic|sysfs|tegrastats|jtop] [--workload cv|change-detection|vlm|alternating]"
                 );
                 std::process::exit(0);
             }
@@ -96,11 +105,19 @@ fn parse_args() -> Result<Args, Box<dyn std::error::Error>> {
         }
     }
 
+    if profile == ExecutionProfile::Hitl && telemetry_source == TelemetrySource::Synthetic {
+        if telemetry_overridden {
+            return Err("hitl profile cannot use synthetic telemetry".into());
+        }
+        telemetry_source = TelemetrySource::Sysfs;
+    }
+
     Ok(Args {
         demo_dtu,
         max_tasks,
         log_jsonl,
         log_csv,
+        profile,
         telemetry_source,
         workload,
     })
@@ -111,6 +128,7 @@ async fn run_dtu_demo(
     max_tasks: usize,
     log_jsonl: PathBuf,
     log_csv: Option<PathBuf>,
+    profile: ExecutionProfile,
     telemetry_source: TelemetrySource,
     workload: WorkloadMode,
 ) -> Result<(), Box<dyn std::error::Error>> {
@@ -155,6 +173,12 @@ async fn run_dtu_demo(
     let mut current_state = SchedulerState::NORMAL;
     let mut producer_done = false;
     let mut handles: Vec<JoinHandle<()>> = Vec::new();
+
+    println!(
+        "profile={} telemetry={}",
+        profile.name(),
+        telemetry_source.name()
+    );
 
     loop {
         tokio::select! {

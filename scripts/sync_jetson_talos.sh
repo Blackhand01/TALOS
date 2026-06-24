@@ -3,6 +3,7 @@ set -euo pipefail
 
 JETSON_HOST="${JETSON_HOST:-ste@192.168.55.1}"
 JETSON_REPO="${JETSON_REPO:-~/TALOS}"
+TALOS_SSH_COMMAND="${TALOS_SSH_COMMAND:-ssh}"
 
 FILES=(
   .gitignore
@@ -14,10 +15,13 @@ FILES=(
   build.rs
   configs
   core
+  deployment
   edge_node
   evaluation
+  hitl
   ipc
   runtime
+  tools
 )
 
 for file in "${FILES[@]}"; do
@@ -27,9 +31,10 @@ for file in "${FILES[@]}"; do
   fi
 done
 
-ssh "${JETSON_HOST}" "mkdir -p ${JETSON_REPO}/logs"
+${TALOS_SSH_COMMAND} "${JETSON_HOST}" "mkdir -p ${JETSON_REPO}/logs"
 
 rsync -avhR \
+  -e "${TALOS_SSH_COMMAND}" \
   --exclude '.DS_Store' \
   --exclude 'target/' \
   --exclude 'logs/' \
