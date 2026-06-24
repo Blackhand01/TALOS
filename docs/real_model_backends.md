@@ -53,6 +53,87 @@ make jetson-run-trt-onnx TRT_ONNX_ARGS='--backend tensorrt-onnx --model /home/st
 make jetson-run-smolvlm SMOLVLM_ARGS='--backend smolvlm-cuda --model HuggingFaceTB/SmolVLM-256M-Instruct --tasks 1 --telemetry tegrastats --log-jsonl logs/hitl-smolvlm-cuda.jsonl --no-csv'
 ```
 
+This single-task probe proves that TALOS can admit and wrap a real VLM process,
+but it is not yet a defect-description benchmark.
+
+## DTU Defect Descriptions With SmolVLM
+
+Use this path when the goal is semantic output: real text descriptions for
+annotated wind-turbine blade defects.
+
+First check the Jetson Python/CUDA environment:
+
+```bash
+make jetson-check-smolvlm-deps
+```
+
+If the check prints a wheel like `torch=...+cu130` and
+`cuda_available=False`, the installed PyTorch build is incompatible with the
+Jetson CUDA driver/runtime. Replace it with the JetPack 6/CUDA 12.6 aarch64
+wheel:
+
+```bash
+make jetson-install-jetpack-torch
+```
+
+If `transformers` or `PIL` are missing:
+
+```bash
+make jetson-install-smolvlm-python-deps
+```
+
+For a full one-shot SmolVLM dependency repair:
+
+```bash
+make jetson-install-smolvlm-jetson-deps
+```
+
+The generic dependency target does not install PyTorch, because CUDA-enabled
+PyTorch on Jetson is tied to the JetPack/L4T version. Use
+`jetson-install-jetpack-torch` or `jetson-install-smolvlm-jetson-deps` only
+when you intentionally want to replace the current PyTorch wheel.
+`torch.cuda.is_available()` must be true before this benchmark is meaningful.
+
+```bash
+make jetson-run-dtu-smolvlm-defects
+```
+
+Default behavior:
+
+```text
+data/test-HR.json annotations
+  -> raw Nordtank 2018 images
+  -> defect-context crops with red bbox overlays
+  -> SmolVLM-256M-Instruct on CUDA
+  -> token-limited textual damage descriptions
+  -> JSONL + Markdown logs
+```
+
+Outputs:
+
+```text
+logs/hitl-dtu-smolvlm-defects.jsonl
+logs/hitl-dtu-smolvlm-defects.md
+logs/hitl-dtu-smolvlm-defects-tegrastats.log
+tmp/dtu_smolvlm_defects/*.jpg
+```
+
+The token limit is controlled through `--max-new-tokens`, defaulting to `32`
+for fast Jetson validation:
+
+```bash
+make jetson-run-dtu-smolvlm-defects DTU_SMOLVLM_ARGS='--annotations data/test-HR.json --image-root data/dtu_wind_turbine --prefer-folder "Nordtank 2018" --max-images 10 --max-new-tokens 24 --output logs/hitl-dtu-smolvlm-defects-10.jsonl --answers-md logs/hitl-dtu-smolvlm-defects-10.md --crop-dir tmp/dtu_smolvlm_defects'
+```
+
+Run a local mapping smoke test without loading the model:
+
+```bash
+make dtu-smolvlm-defects-dry-run
+```
+
+This checks the COCO annotations, raw-image lookup, crop generation, and log
+format. It still requires Pillow because crops are created locally.
+
 ## Logging Contract
 
 Every run writes the standard TALOS fields plus real-model fields:

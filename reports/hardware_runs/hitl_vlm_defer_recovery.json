@@ -1,0 +1,113 @@
+{
+  "run_id": "hitl_vlm_defer_recovery",
+  "label": "HITL VLM thermal defer and recovery, Orin Nano",
+  "profile": "HITL",
+  "source": "Jetson Orin Nano run pasted from terminal, 2026-06-25 01:00 Europe/Rome",
+  "notes": "TALOS ran a thermal workload with VLM temperature gate at 50C. While hot, low-priority VLM tasks were deferred. After the task stream completed, TALOS stopped CPU burners, let the device cool below the gate, and replayed every deferred VLM task.",
+  "hardware": {
+    "device": "NVIDIA Jetson Orin Nano 8GB",
+    "fan_pwm": 255
+  },
+  "config": {
+    "telemetry": "sysfs plus tegrastats side channel",
+    "duration_secs": 120,
+    "tasks": 240,
+    "vlm_temperature_gate_c": 50.0,
+    "target_temp_c": 50.0,
+    "stop_temp_c": 72.0,
+    "drain_deferred": true,
+    "cpu_burn_threads": 6,
+    "memory_pressure_mb": 0
+  },
+  "summary": {
+    "completed_tasks": 276,
+    "unique_tasks": 240,
+    "admitted": 240,
+    "deferred": 36,
+    "rejected": 0,
+    "executed": 240,
+    "telemetry_valid_samples": 300,
+    "high_load_samples": 130,
+    "throttle_samples": 0,
+    "degraded_samples": 0,
+    "vlm_admitted": 40,
+    "vlm_deferred": 36,
+    "vlm_rejected": 0,
+    "vlm_thermal_pressure_deferrals": 21,
+    "vlm_memory_pressure_decisions": 0,
+    "deferred_replayed": 36,
+    "vlm_replayed": 36,
+    "deferred_recovery_high_load_overrides": 15,
+    "execution_time_ms_p50": 143,
+    "execution_time_ms_p95": 246,
+    "runtime_latency_ms_p50": 138,
+    "runtime_latency_ms_p95": 237,
+    "throughput_tps": 6.003,
+    "peak_memory_percent": 32.469,
+    "peak_temperature_c": 51.312,
+    "peak_gpu_utilization_percent": 0.0,
+    "max_queue_pressure": 36
+  },
+  "timeline": [
+    {
+      "elapsed_ms": 1643,
+      "phase": "gate_reached",
+      "temperature_c": 50.062,
+      "memory_percent": 31.918,
+      "executed": 9,
+      "vlm_deferred": 0,
+      "vlm_replayed": 0,
+      "queued_tasks": 0
+    },
+    {
+      "elapsed_ms": 4562,
+      "phase": "first_defer",
+      "temperature_c": 50.25,
+      "memory_percent": 31.928,
+      "executed": 24,
+      "vlm_deferred": 1,
+      "vlm_replayed": 0,
+      "queued_tasks": 1
+    },
+    {
+      "elapsed_ms": 36174,
+      "phase": "stream_complete_hot",
+      "temperature_c": 50.906,
+      "memory_percent": 32.438,
+      "executed": 204,
+      "vlm_deferred": 36,
+      "vlm_replayed": 0,
+      "queued_tasks": 36
+    },
+    {
+      "elapsed_ms": 36176,
+      "phase": "cooling_started",
+      "temperature_c": 50.906,
+      "memory_percent": 32.438,
+      "executed": 204,
+      "vlm_deferred": 36,
+      "vlm_replayed": 0,
+      "queued_tasks": 36
+    },
+    {
+      "elapsed_ms": 36621,
+      "phase": "first_replay",
+      "temperature_c": 49.937,
+      "memory_percent": 32.438,
+      "executed": 205,
+      "vlm_deferred": 36,
+      "vlm_replayed": 1,
+      "queued_tasks": 35
+    },
+    {
+      "elapsed_ms": 39979,
+      "phase": "recovery_complete",
+      "temperature_c": 49.937,
+      "memory_percent": 32.469,
+      "executed": 240,
+      "vlm_deferred": 36,
+      "vlm_replayed": 36,
+      "queued_tasks": 0
+    }
+  ]
+}

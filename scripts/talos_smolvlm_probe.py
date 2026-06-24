@@ -36,6 +36,7 @@ def main() -> int:
     args = parse_args()
     try:
         import torch
+        import PIL.ImagePalette
         from PIL import Image, ImageDraw
         from transformers import AutoModelForVision2Seq, AutoProcessor
     except Exception as exc:  # noqa: BLE001

@@ -48,10 +48,19 @@ CUDA_BURN_BLOCKS ?= 512
 CUDA_BURN_THREADS ?= 256
 CUDA_BURN_ITERATIONS ?= 40000
 GPU_RESOURCE_ARGS ?= --workload thermal --tasks 100000 --duration-secs $(CUDA_BURN_SECONDS) --progress-every 1 --cpu-burn-threads auto --target-temp-c 70 --stop-temp-c 82 --memory-pressure-mb 4096 --vlm-temperature-gate-c 70 --telemetry sysfs --sample-ms 50 --inter-task-ms 0 --payload-bytes 1048576 --log-jsonl logs/hitl-gpu-resource-max.jsonl --no-csv
+VLM_DEFER_TEMP_C ?= 49
+VLM_DEFER_DEMO_ARGS ?= --workload thermal --tasks 240 --duration-secs 60 --progress-every 1 --cpu-burn-threads auto --target-temp-c $(VLM_DEFER_TEMP_C) --stop-temp-c 72 --memory-pressure-mb 0 --vlm-temperature-gate-c $(VLM_DEFER_TEMP_C) --telemetry sysfs --sample-ms 50 --inter-task-ms 0 --payload-bytes 1048576 --log-jsonl logs/hitl-vlm-defer-demo.jsonl --no-csv --no-drain-deferred
+VLM_DEFER_RECOVERY_ARGS ?= --workload thermal --tasks 240 --duration-secs 120 --progress-every 1 --cpu-burn-threads auto --target-temp-c $(VLM_DEFER_TEMP_C) --stop-temp-c 72 --memory-pressure-mb 0 --vlm-temperature-gate-c $(VLM_DEFER_TEMP_C) --telemetry sysfs --sample-ms 50 --inter-task-ms 0 --payload-bytes 1048576 --log-jsonl logs/hitl-vlm-defer-recovery.jsonl --no-csv --drain-deferred
+JETSON_FAN_PWM ?= 90
 JETSON_HARDEN_ARGS ?= --mode 0
 REAL_MODEL_ARGS ?= --backend tensorrt-engine --model models/vision.engine --tasks 1 --telemetry tegrastats --log-jsonl logs/hitl-real-model.jsonl --no-csv
 TRT_ONNX_ARGS ?= --backend tensorrt-onnx --model models/vision.onnx --tasks 1 --telemetry tegrastats --log-jsonl logs/hitl-trt-onnx.jsonl --no-csv
 SMOLVLM_ARGS ?= --backend smolvlm-cuda --model HuggingFaceTB/SmolVLM-256M-Instruct --tasks 1 --telemetry tegrastats --log-jsonl logs/hitl-smolvlm-cuda.jsonl --no-csv
+DTU_SMOLVLM_ARGS ?= --annotations data/test-HR.json --image-root data/dtu_wind_turbine --prefer-folder "Nordtank 2018" --output logs/hitl-dtu-smolvlm-defects.jsonl --answers-md logs/hitl-dtu-smolvlm-defects.md --crop-dir tmp/dtu_smolvlm_defects --max-new-tokens 32
+DTU_SMOLVLM_DRY_RUN_ARGS ?= --dry-run --max-images 3 --annotations data/test-HR.json --image-root data/dtu_wind_turbine --prefer-folder "Nordtank 2018" --output logs/dtu-smolvlm-dry-run.jsonl --answers-md logs/dtu-smolvlm-dry-run.md --crop-dir tmp/dtu_smolvlm_defects --max-new-tokens 32
+JETSON_TORCH_INDEX ?= https://pypi.jetson-ai-lab.io/jp6/cu126
+JETSON_TORCH_PACKAGE ?= torch==2.8.0
+JETSON_TORCHVISION_PACKAGE ?= torchvision==0.23.0
 TINY_VISION_ONNX ?= models/vision.onnx
 TINY_VISION_ARGS ?= --backend tensorrt-onnx --model $(TINY_VISION_ONNX) --backend-arg --fp16 --tasks 3 --telemetry tegrastats --log-jsonl logs/hitl-tiny-vision-trt.jsonl --no-csv
 
@@ -91,6 +100,11 @@ hitl-heavy: ## Run a local heavy HITL workload if this system exposes compatible
 real-model: ## Run local TALOS control plane around a real external model backend.
 	mkdir -p logs
 	CARGO_TARGET_DIR=$(LOCAL_TARGET_DIR) $(CARGO) run --bin talos_real_model -- $(REAL_MODEL_ARGS)
+
+.PHONY: dtu-smolvlm-defects-dry-run
+dtu-smolvlm-defects-dry-run: ## Validate DTU annotation/image mapping without running SmolVLM.
+	mkdir -p logs tmp
+	$(PYTHON) scripts/run_dtu_smolvlm_defects.py $(DTU_SMOLVLM_DRY_RUN_ARGS)
 
 .PHONY: model-tiny-vision
 model-tiny-vision: ## Generate a small static ONNX vision model locally. Requires python onnx + numpy.
@@ -199,8 +213,9 @@ jetson-sync: ## Safely copy local files to the Jetson. Does not delete remote-on
 .PHONY: jetson-sync-data
 jetson-sync-data: jetson-prepare ## Copy the local DTU dataset to the Jetson. Optional and heavier.
 	$(SSH) $(SSH_OPTS) $(JETSON_HOST) 'mkdir -p $(JETSON_DIR)/data'
-	$(RSYNC) $(RSYNC_FLAGS) --exclude='.DS_Store' data/dataset.md $(JETSON_HOST):$(JETSON_DIR)/data/
-	$(RSYNC) $(RSYNC_FLAGS) --exclude='.DS_Store' data/dtu_wind_turbine/ $(JETSON_HOST):$(JETSON_DIR)/data/dtu_wind_turbine/
+	$(RSYNC) -e '$(TALOS_SSH_COMMAND)' $(RSYNC_FLAGS) --exclude='.DS_Store' data/dataset.md $(JETSON_HOST):$(JETSON_DIR)/data/
+	$(RSYNC) -e '$(TALOS_SSH_COMMAND)' $(RSYNC_FLAGS) --exclude='.DS_Store' data/*.json $(JETSON_HOST):$(JETSON_DIR)/data/
+	$(RSYNC) -e '$(TALOS_SSH_COMMAND)' $(RSYNC_FLAGS) --exclude='.DS_Store' data/dtu_wind_turbine/ $(JETSON_HOST):$(JETSON_DIR)/data/dtu_wind_turbine/
 
 .PHONY: jetson-backup
 jetson-backup: ## Archive the current remote project before destructive cleanup.
@@ -408,6 +423,59 @@ jetson-run-gpu-resource-max: jetson-build-cuda-burn ## Run CUDA burn concurrentl
 		(/tmp/talos-tools/talos_cuda_burn $(CUDA_BURN_SECONDS) $(CUDA_BURN_BLOCKS) $(CUDA_BURN_THREADS) $(CUDA_BURN_ITERATIONS) | tee logs/hitl-cuda-burn.log) & cuda_burn_pid=$$!; \
 		CARGO_TARGET_DIR=$(JETSON_TARGET_DIR) cargo run --bin talos_hitl -- $(GPU_RESOURCE_ARGS)'
 
+.PHONY: jetson-fan-status
+jetson-fan-status: ## Print likely Jetson fan PWM control nodes and current values.
+	$(SSH) $(SSH_OPTS) $(JETSON_HOST) 'set +e; \
+		for path in /sys/devices/pwm-fan/target_pwm /sys/devices/pwm-fan/temp_control /sys/class/hwmon/hwmon*/pwm1 /sys/class/hwmon/hwmon*/pwm1_enable; do \
+			if [ -e "$$path" ]; then printf "%s=" "$$path"; cat "$$path" 2>/dev/null || echo unreadable; fi; \
+		done'
+
+.PHONY: jetson-fan-set
+jetson-fan-set: ## Set Jetson fan PWM manually. Requires CONFIRM=1 JETSON_FAN_PWM=0..255.
+	@test "$(CONFIRM)" = "1" || (echo 'Refusing to change fan. Re-run with: make jetson-fan-set CONFIRM=1 JETSON_FAN_PWM=90'; exit 2)
+	$(SSH) $(SSH_TTY_OPTS) $(JETSON_HOST) 'set -e; \
+		value="$(JETSON_FAN_PWM)"; \
+		case "$$value" in ""|*[!0-9]*) echo "JETSON_FAN_PWM must be 0..255"; exit 2;; esac; \
+		if [ "$$value" -lt 0 ] || [ "$$value" -gt 255 ]; then echo "JETSON_FAN_PWM must be 0..255"; exit 2; fi; \
+		target=""; \
+		for path in /sys/devices/pwm-fan/target_pwm /sys/class/hwmon/hwmon*/pwm1; do if [ -e "$$path" ]; then target="$$path"; break; fi; done; \
+		test -n "$$target" || { echo "fan pwm node not found"; exit 1; }; \
+		echo "setting $$target=$$value"; \
+		echo "$$value" | sudo tee "$$target" >/dev/null; \
+		printf "%s=" "$$target"; cat "$$target"'
+
+.PHONY: jetson-fan-max
+jetson-fan-max: ## Set Jetson fan PWM to 255. Requires CONFIRM=1.
+	$(MAKE) jetson-fan-set CONFIRM=$(CONFIRM) JETSON_FAN_PWM=255
+
+.PHONY: jetson-run-vlm-defer-demo
+jetson-run-vlm-defer-demo: jetson-sync ## HITL demo that forces VLM thermal DEFER using real sysfs temperature. Override VLM_DEFER_TEMP_C='...'.
+	$(SSH) $(SSH_OPTS) $(JETSON_HOST) 'set -e; \
+		cd $(JETSON_DIR); \
+		if [ -f "$$HOME/.cargo/env" ]; then . "$$HOME/.cargo/env"; fi; \
+		mkdir -p logs; \
+		cleanup() { \
+			set +e; \
+			if [ -n "$${tegrastats_pid:-}" ]; then kill "$$tegrastats_pid" 2>/dev/null || true; wait "$$tegrastats_pid" 2>/dev/null || true; fi; \
+		}; \
+		trap cleanup EXIT INT TERM; \
+		(tegrastats --interval 1000 2>/dev/null | tee logs/hitl-vlm-defer-demo-tegrastats.log) & tegrastats_pid=$$!; \
+		CARGO_TARGET_DIR=$(JETSON_TARGET_DIR) cargo run --bin talos_hitl -- $(VLM_DEFER_DEMO_ARGS)'
+
+.PHONY: jetson-run-vlm-defer-recovery
+jetson-run-vlm-defer-recovery: jetson-sync ## HITL demo that defers VLM under thermal pressure and replays queued VLM after cooldown.
+	$(SSH) $(SSH_OPTS) $(JETSON_HOST) 'set -e; \
+		cd $(JETSON_DIR); \
+		if [ -f "$$HOME/.cargo/env" ]; then . "$$HOME/.cargo/env"; fi; \
+		mkdir -p logs; \
+		cleanup() { \
+			set +e; \
+			if [ -n "$${tegrastats_pid:-}" ]; then kill "$$tegrastats_pid" 2>/dev/null || true; wait "$$tegrastats_pid" 2>/dev/null || true; fi; \
+		}; \
+		trap cleanup EXIT INT TERM; \
+		(tegrastats --interval 1000 2>/dev/null | tee logs/hitl-vlm-defer-recovery-tegrastats.log) & tegrastats_pid=$$!; \
+		CARGO_TARGET_DIR=$(JETSON_TARGET_DIR) cargo run --bin talos_hitl -- $(VLM_DEFER_RECOVERY_ARGS)'
+
 .PHONY: jetson-run-real-model
 jetson-run-real-model: jetson-sync ## Run TALOS admission/lease/logging around a real external model backend. Override REAL_MODEL_ARGS='...'.
 	$(SSH) $(SSH_OPTS) $(JETSON_HOST) 'cd $(JETSON_DIR) && if [ -f "$$HOME/.cargo/env" ]; then . "$$HOME/.cargo/env"; fi && mkdir -p logs tmp && CARGO_TARGET_DIR=$(JETSON_TARGET_DIR) cargo run --bin talos_real_model -- $(REAL_MODEL_ARGS)'
@@ -427,6 +495,43 @@ jetson-run-trt-onnx: jetson-sync ## Run TALOS around TensorRT trtexec from an ON
 .PHONY: jetson-run-smolvlm
 jetson-run-smolvlm: jetson-sync ## Run TALOS around a real SmolVLM CUDA inference on Jetson. Override SMOLVLM_ARGS='...'.
 	$(SSH) $(SSH_OPTS) $(JETSON_HOST) 'cd $(JETSON_DIR) && if [ -f "$$HOME/.cargo/env" ]; then . "$$HOME/.cargo/env"; fi && mkdir -p logs tmp && CARGO_TARGET_DIR=$(JETSON_TARGET_DIR) cargo run --bin talos_real_model -- $(SMOLVLM_ARGS)'
+
+.PHONY: jetson-check-smolvlm-deps
+jetson-check-smolvlm-deps: jetson-sync ## Check Python dependencies for SmolVLM on the Jetson.
+	$(SSH) $(SSH_OPTS) $(JETSON_HOST) 'set -e; \
+		cd $(JETSON_DIR); \
+		python3 -c "import importlib.util, sys; missing=[name for name in (\"torch\", \"transformers\", \"PIL\") if importlib.util.find_spec(name) is None]; print(\"missing=\" + \",\".join(missing) if missing else \"missing=none\"); exec(\"import PIL.ImagePalette\\nimport torch\\nprint(\\\"torch=\\\" + torch.__version__)\\nprint(\\\"cuda_available=\\\" + str(torch.cuda.is_available()))\\nsys.exit(0 if torch.cuda.is_available() else 2)\") if not missing else sys.exit(1)"'
+
+.PHONY: jetson-install-smolvlm-python-deps
+jetson-install-smolvlm-python-deps: jetson-sync ## Install generic SmolVLM Python deps. Does not install Jetson-specific PyTorch.
+	$(SSH) $(SSH_OPTS) $(JETSON_HOST) 'set -e; \
+		python3 -m pip install --user --upgrade pillow transformers accelerate safetensors'
+
+.PHONY: jetson-install-jetpack-torch
+jetson-install-jetpack-torch: jetson-sync ## Replace incompatible PyTorch with JetPack 6/CUDA 12.6 aarch64 wheels.
+	$(SSH) $(SSH_OPTS) $(JETSON_HOST) 'set -e; \
+		python3 -m pip uninstall -y torch torchvision torchaudio || true; \
+		python3 -m pip install --user --upgrade pip; \
+		python3 -m pip install --user --no-cache-dir numpy==1.26.1; \
+		python3 -m pip install --user --no-cache-dir --index-url=$(JETSON_TORCH_INDEX) $(JETSON_TORCH_PACKAGE) $(JETSON_TORCHVISION_PACKAGE); \
+		python3 -c "import torch; print(\"torch=\" + torch.__version__); print(\"cuda_available=\" + str(torch.cuda.is_available())); print(\"cuda=\" + str(torch.version.cuda)); print(\"device=\" + (torch.cuda.get_device_name(0) if torch.cuda.is_available() else \"none\")); raise SystemExit(0 if torch.cuda.is_available() else 2)"'
+
+.PHONY: jetson-install-smolvlm-jetson-deps
+jetson-install-smolvlm-jetson-deps: jetson-install-jetpack-torch jetson-install-smolvlm-python-deps ## Install Jetson PyTorch plus generic SmolVLM deps, then verify CUDA.
+	$(MAKE) jetson-check-smolvlm-deps
+
+.PHONY: jetson-run-dtu-smolvlm-defects
+jetson-run-dtu-smolvlm-defects: jetson-ssh-start jetson-sync jetson-sync-data ## Run real SmolVLM descriptions for annotated DTU defects. Override DTU_SMOLVLM_ARGS='...'.
+	$(SSH) $(SSH_OPTS) $(JETSON_HOST) 'set -e; \
+		cd $(JETSON_DIR); \
+		mkdir -p logs tmp; \
+		cleanup() { \
+			set +e; \
+			if [ -n "$${tegrastats_pid:-}" ]; then kill "$$tegrastats_pid" 2>/dev/null || true; wait "$$tegrastats_pid" 2>/dev/null || true; fi; \
+		}; \
+		trap cleanup EXIT INT TERM; \
+		(tegrastats --interval 1000 2>/dev/null | tee logs/hitl-dtu-smolvlm-defects-tegrastats.log) & tegrastats_pid=$$!; \
+		python3 scripts/run_dtu_smolvlm_defects.py $(DTU_SMOLVLM_ARGS)'
 
 .PHONY: jetson-setup-tiny-vision-onnx
 jetson-setup-tiny-vision-onnx: jetson-ssh-start jetson-sync ## Generate models/vision.onnx on the Jetson. Installs user-level Python deps if needed.

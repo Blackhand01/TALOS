@@ -1,0 +1,38 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="980" height="520" viewBox="0 0 980 520" role="img">
+<style>
+text{font-family:Inter,Arial,sans-serif;fill:#17202a} .small{font-size:13px}.label{font-size:15px;font-weight:600}.title{font-size:22px;font-weight:700}.muted{fill:#5d6d7e}.box{fill:#f8fafc;stroke:#ccd6e0;stroke-width:1.5}.green{fill:#1f9d55}.red{fill:#c0392b}.blue{fill:#2471a3}.amber{fill:#d68910}.purple{fill:#6c5ce7}.line{stroke:#2c3e50;stroke-width:2;fill:none}.grid{stroke:#edf2f7;stroke-width:1}
+</style>
+<rect width="980" height="520" fill="#ffffff"/>
+<text x="40" y="48" class="title">Mission story: protect CV, postpone VLM, recover later</text>
+<text x="40" y="75" class="small muted">This is the recruiter-readable point of TALOS: graceful degradation instead of uncontrolled contention.</text>
+<rect x="45" y="132" width="205" height="210" rx="8" fill="#eef7ff" stroke="#ccd6e0" stroke-width="1.5"/>
+<text x="63" y="170" class="label">1. Nominal</text>
+<text x="63" y="205" class="small muted">CV / change / VLM are</text>
+<text x="63" y="229" class="small muted">admitted while telemetry is</text>
+<text x="63" y="253" class="small muted">healthy.</text>
+<rect x="63" y="280" width="160" height="36" rx="6" fill="#ffffff" stroke="#d8dee6"/>
+<text x="143" y="303" text-anchor="middle" class="small">temp &lt; gate</text>
+<rect x="280" y="132" width="205" height="210" rx="8" fill="#fff7e8" stroke="#ccd6e0" stroke-width="1.5"/>
+<text x="298" y="170" class="label">2. Thermal pressure</text>
+<text x="298" y="205" class="small muted">Low-priority VLM is</text>
+<text x="298" y="229" class="small muted">deferred; critical CV keeps</text>
+<text x="298" y="253" class="small muted">running.</text>
+<rect x="298" y="280" width="160" height="36" rx="6" fill="#ffffff" stroke="#d8dee6"/>
+<text x="378" y="303" text-anchor="middle" class="small">vlm_deferred=36</text>
+<rect x="515" y="132" width="205" height="210" rx="8" fill="#f8fafc" stroke="#ccd6e0" stroke-width="1.5"/>
+<text x="533" y="170" class="label">3. Cooldown</text>
+<text x="533" y="205" class="small muted">TALOS stops synthetic burn</text>
+<text x="533" y="229" class="small muted">and waits for real telemetry</text>
+<text x="533" y="253" class="small muted">to recover.</text>
+<rect x="533" y="280" width="160" height="36" rx="6" fill="#ffffff" stroke="#d8dee6"/>
+<text x="613" y="303" text-anchor="middle" class="small">burners off</text>
+<rect x="750" y="132" width="205" height="210" rx="8" fill="#eafaf1" stroke="#ccd6e0" stroke-width="1.5"/>
+<text x="768" y="170" class="label">4. Recovery</text>
+<text x="768" y="205" class="small muted">Deferred VLM work is</text>
+<text x="768" y="229" class="small muted">replayed. No VLM task is</text>
+<text x="768" y="253" class="small muted">lost.</text>
+<rect x="768" y="280" width="160" height="36" rx="6" fill="#ffffff" stroke="#d8dee6"/>
+<text x="848" y="303" text-anchor="middle" class="small">vlm_replayed=36/36</text>
+<text x="55" y="420" class="label">Observed HITL result</text>
+<text x="55" y="450" class="small muted">unique_tasks=240, executed=240, rejected=0, peak_temp_c=51.312, high_load_samples=130</text>
+</svg>

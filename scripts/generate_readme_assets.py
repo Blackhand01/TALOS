@@ -104,6 +104,11 @@ def write(path: Path, content: str) -> None:
     path.write_text(content, encoding="utf-8")
 
 
+def write_bytes(path: Path, content: bytes) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(content)
+
+
 def svg_header(width: int, height: int) -> list[str]:
     return [
         f'<svg xmlns="http://www.w3.org/2000/svg" width="{width}" height="{height}" viewBox="0 0 {width} {height}" role="img">',
@@ -182,24 +187,26 @@ def generate_policy_svg() -> str:
 def generate_bar_svg(hardware_runs: list[dict]) -> str:
     gpu = next(run for run in hardware_runs if run["run_id"] == "hitl_gpu_resource_max_thermal55")
     memory = next(run for run in hardware_runs if run["run_id"] == "hitl_resource_max_memory")
+    recovery = next(run for run in hardware_runs if run["run_id"] == "hitl_vlm_defer_recovery")
     metrics = [
         ("GPU load", gpu["summary"]["peak_gpu_utilization_percent"], 100, "#2471a3"),
         ("Thermal VLM deferrals", gpu["summary"]["vlm_thermal_pressure_deferrals"], 8, "#c0392b"),
         ("Memory pressure", memory["summary"]["peak_memory_percent"], 100, "#d68910"),
         ("Memory-gated VLM", memory["summary"]["vlm_memory_pressure_decisions"], 25, "#6c5ce7"),
+        ("Replay success", recovery["summary"]["vlm_replayed"], recovery["summary"]["vlm_deferred"], "#1f9d55"),
     ]
-    parts = svg_header(980, 420)
-    parts.append('<rect width="980" height="420" fill="#ffffff"/>')
+    parts = svg_header(1080, 420)
+    parts.append('<rect width="1080" height="420" fill="#ffffff"/>')
     parts.append('<text x="40" y="48" class="title">Hardware validation summary</text>')
     parts.append('<text x="40" y="75" class="small muted">Real Orin Nano telemetry from HITL runs pasted from terminal.</text>')
     x = 70
     for label, value, max_value, color in metrics:
         bar_h = 220 * min(float(value) / max_value, 1.0)
-        parts.append(f'<rect x="{x}" y="{300-bar_h:.1f}" width="120" height="{bar_h:.1f}" rx="5" fill="{color}"/>')
-        parts.append(f'<text x="{x+60}" y="{326}" text-anchor="middle" class="label">{value:g}</text>')
-        parts.append(f'<text x="{x+60}" y="{355}" text-anchor="middle" class="small muted">{esc(label)}</text>')
-        x += 220
-    parts.append('<line x1="45" y1="300" x2="930" y2="300" stroke="#d8dee6"/>')
+        parts.append(f'<rect x="{x}" y="{300-bar_h:.1f}" width="105" height="{bar_h:.1f}" rx="5" fill="{color}"/>')
+        parts.append(f'<text x="{x+52}" y="{326}" text-anchor="middle" class="label">{value:g}</text>')
+        parts.append(f'<text x="{x+52}" y="{355}" text-anchor="middle" class="small muted">{esc(label)}</text>')
+        x += 190
+    parts.append('<line x1="45" y1="300" x2="1030" y2="300" stroke="#d8dee6"/>')
     parts.append("</svg>")
     return "\n".join(parts)
 
@@ -208,6 +215,21 @@ def scale(value: float, min_value: float, max_value: float, out_min: float, out_
     if max_value == min_value:
         return (out_min + out_max) / 2
     return out_min + ((value - min_value) / (max_value - min_value)) * (out_max - out_min)
+
+
+def wrap_words(text: str, max_chars: int) -> list[str]:
+    lines: list[str] = []
+    current: list[str] = []
+    for word in text.split():
+        candidate = " ".join(current + [word])
+        if len(candidate) > max_chars and current:
+            lines.append(" ".join(current))
+            current = [word]
+        else:
+            current.append(word)
+    if current:
+        lines.append(" ".join(current))
+    return lines
 
 
 def generate_timeline_svg(gpu_run: dict) -> str:
@@ -249,10 +271,194 @@ def generate_timeline_svg(gpu_run: dict) -> str:
     return "\n".join(parts)
 
 
+def generate_recovery_timeline_svg(recovery_run: dict) -> str:
+    points = recovery_run["timeline"]
+    xs = [point["elapsed_ms"] / 1000 for point in points]
+    temps = [point["temperature_c"] for point in points]
+    deferred = [point["vlm_deferred"] for point in points]
+    replayed = [point["vlm_replayed"] for point in points]
+    gate = recovery_run["config"]["vlm_temperature_gate_c"]
+
+    parts = svg_header(980, 500)
+    parts.append('<rect width="980" height="500" fill="#ffffff"/>')
+    parts.append('<text x="40" y="48" class="title">HITL VLM defer and recovery on Orin Nano</text>')
+    parts.append('<text x="40" y="75" class="small muted">Real sysfs telemetry: TALOS defers low-priority VLM while hot, then replays the entire queue after cooldown.</text>')
+    chart_x, chart_y, chart_w, chart_h = 82, 120, 800, 250
+    for i in range(6):
+        y = chart_y + i * chart_h / 5
+        parts.append(f'<line x1="{chart_x}" y1="{y:.1f}" x2="{chart_x+chart_w}" y2="{y:.1f}" class="grid"/>')
+    temp_path = []
+    deferred_path = []
+    replay_path = []
+    for x_s, temp, defer, replay in zip(xs, temps, deferred, replayed):
+        x = scale(x_s, min(xs), max(xs), chart_x, chart_x + chart_w)
+        y_temp = scale(temp, min(temps) - 0.5, max(temps) + 0.5, chart_y + chart_h, chart_y)
+        y_defer = scale(defer, 0, max(deferred) or 1, chart_y + chart_h, chart_y)
+        y_replay = scale(replay, 0, max(replayed) or 1, chart_y + chart_h, chart_y)
+        temp_path.append(f"{x:.1f},{y_temp:.1f}")
+        deferred_path.append(f"{x:.1f},{y_defer:.1f}")
+        replay_path.append(f"{x:.1f},{y_replay:.1f}")
+    gate_y = scale(gate, min(temps) - 0.5, max(temps) + 0.5, chart_y + chart_h, chart_y)
+    parts.append(f'<line x1="{chart_x}" y1="{gate_y:.1f}" x2="{chart_x+chart_w}" y2="{gate_y:.1f}" stroke="#c0392b" stroke-dasharray="6 5" stroke-width="2"/>')
+    parts.append(f'<text x="{chart_x+chart_w-160}" y="{gate_y-8:.1f}" class="small red">VLM gate {gate:.0f}C</text>')
+    parts.append(f'<polyline points="{" ".join(temp_path)}" fill="none" stroke="#c0392b" stroke-width="3"/>')
+    parts.append(f'<polyline points="{" ".join(deferred_path)}" fill="none" stroke="#d68910" stroke-width="3"/>')
+    parts.append(f'<polyline points="{" ".join(replay_path)}" fill="none" stroke="#1f9d55" stroke-width="3"/>')
+    for point, x_s, temp, defer, replay in zip(points, xs, temps, deferred, replayed):
+        x = scale(x_s, min(xs), max(xs), chart_x, chart_x + chart_w)
+        y_temp = scale(temp, min(temps) - 0.5, max(temps) + 0.5, chart_y + chart_h, chart_y)
+        parts.append(f'<circle cx="{x:.1f}" cy="{y_temp:.1f}" r="5" fill="#c0392b"/>')
+        if point["phase"] in {"cooling_started", "recovery_complete"}:
+            parts.append(f'<line x1="{x:.1f}" y1="{chart_y}" x2="{x:.1f}" y2="{chart_y+chart_h}" stroke="#5d6d7e" stroke-dasharray="5 5"/>')
+            label = "cooldown starts" if point["phase"] == "cooling_started" else "queue empty"
+            parts.append(f'<text x="{x+8:.1f}" y="{chart_y+22}" class="small muted">{label}</text>')
+    parts.append('<text x="82" y="415" class="small red">red: temperature C</text>')
+    parts.append('<text x="255" y="415" class="small amber">amber: cumulative VLM deferred</text>')
+    parts.append('<text x="520" y="415" class="small green">green: deferred VLM replayed</text>')
+    parts.append('<text x="720" y="445" class="small muted">x-axis: elapsed seconds</text>')
+    parts.append("</svg>")
+    return "\n".join(parts)
+
+
+def generate_recovery_storyboard_svg(recovery_run: dict) -> str:
+    s = recovery_run["summary"]
+    parts = svg_header(980, 520)
+    parts.append('<rect width="980" height="520" fill="#ffffff"/>')
+    parts.append('<text x="40" y="48" class="title">Mission story: protect CV, postpone VLM, recover later</text>')
+    parts.append('<text x="40" y="75" class="small muted">This is the recruiter-readable point of TALOS: graceful degradation instead of uncontrolled contention.</text>')
+    cards = [
+        ("1. Nominal", "CV / change / VLM are admitted while telemetry is healthy.", "temp < gate", "#eef7ff"),
+        ("2. Thermal pressure", "Low-priority VLM is deferred; critical CV keeps running.", f"vlm_deferred={s['vlm_deferred']}", "#fff7e8"),
+        ("3. Cooldown", "TALOS stops synthetic burn and waits for real telemetry to recover.", "burners off", "#f8fafc"),
+        ("4. Recovery", "Deferred VLM work is replayed. No VLM task is lost.", f"vlm_replayed={s['vlm_replayed']}/{s['vlm_deferred']}", "#eafaf1"),
+    ]
+    x = 45
+    for title, body, metric, fill in cards:
+        parts.append(f'<rect x="{x}" y="132" width="205" height="210" rx="8" fill="{fill}" stroke="#ccd6e0" stroke-width="1.5"/>')
+        parts.append(f'<text x="{x+18}" y="170" class="label">{esc(title)}</text>')
+        for i, line in enumerate(wrap_words(body, 28)[:4]):
+            parts.append(f'<text x="{x+18}" y="{205 + i*24}" class="small muted">{esc(line)}</text>')
+        parts.append(f'<rect x="{x+18}" y="280" width="160" height="36" rx="6" fill="#ffffff" stroke="#d8dee6"/>')
+        parts.append(f'<text x="{x+98}" y="303" text-anchor="middle" class="small">{esc(metric)}</text>')
+        x += 235
+    parts.append('<text x="55" y="420" class="label">Observed HITL result</text>')
+    parts.append(f'<text x="55" y="450" class="small muted">unique_tasks={s["unique_tasks"]}, executed={s["executed"]}, rejected={s["rejected"]}, peak_temp_c={s["peak_temperature_c"]:.3f}, high_load_samples={s["high_load_samples"]}</text>')
+    parts.append("</svg>")
+    return "\n".join(parts)
+
+
+def gif_lzw_data(pixels: bytes, clear_interval: int = 200) -> bytes:
+    clear = 256
+    end = 257
+    codes: list[int] = [clear]
+    emitted_since_clear = 0
+    for pixel in pixels:
+        if emitted_since_clear >= clear_interval:
+            codes.append(clear)
+            emitted_since_clear = 0
+        codes.append(pixel)
+        emitted_since_clear += 1
+    codes.append(end)
+
+    out = bytearray()
+    bit_buffer = 0
+    bit_count = 0
+    code_size = 9
+    next_code = 258
+    for code in codes:
+        bit_buffer |= code << bit_count
+        bit_count += code_size
+        while bit_count >= 8:
+            out.append(bit_buffer & 0xFF)
+            bit_buffer >>= 8
+            bit_count -= 8
+        if code == clear:
+            code_size = 9
+            next_code = 258
+        elif code != end:
+            next_code += 1
+            if next_code >= (1 << code_size) and code_size < 12:
+                code_size += 1
+    if bit_count:
+        out.append(bit_buffer & 0xFF)
+
+    blocks = bytearray([8])
+    for start in range(0, len(out), 255):
+        block = out[start : start + 255]
+        blocks.append(len(block))
+        blocks.extend(block)
+    blocks.append(0)
+    return bytes(blocks)
+
+
+def generate_recovery_gif(recovery_run: dict) -> bytes:
+    width, height = 640, 360
+    palette = [
+        (255, 255, 255), (23, 32, 42), (31, 157, 85), (214, 137, 16),
+        (192, 57, 43), (36, 113, 163), (216, 222, 230), (108, 92, 231),
+    ] + [(255, 255, 255)] * 248
+
+    def frame(temp_ratio: float, queued: int, replayed: int, burner_on: bool) -> bytes:
+        px = bytearray([0] * (width * height))
+
+        def rect(x: int, y: int, w: int, h: int, color: int) -> None:
+            for yy in range(max(0, y), min(height, y + h)):
+                start = yy * width + max(0, x)
+                end = yy * width + min(width, x + w)
+                px[start:end] = bytes([color]) * (end - start)
+
+        rect(40, 40, 560, 20, 6)
+        rect(40, 40, int(560 * temp_ratio), 20, 4)
+        rect(80, 120, 150, 74, 2)
+        rect(80, 215, 150, 74, 2)
+        rect(285, 110, 100, 195, 6)
+        for i in range(queued):
+            rect(300, 120 + i * 13, 70, 9, 3)
+        for i in range(replayed):
+            rect(455, 120 + i * 13, 70, 9, 5)
+        if burner_on:
+            rect(545, 132, 52, 52, 4)
+            rect(560, 195, 22, 88, 4)
+        else:
+            rect(545, 132, 52, 52, 6)
+            rect(560, 195, 22, 88, 6)
+        return bytes(px)
+
+    frames = [
+        frame(0.35, 0, 0, True),
+        frame(0.76, 8, 0, True),
+        frame(0.92, 18, 0, True),
+        frame(0.66, 18, 0, False),
+        frame(0.48, 10, 8, False),
+        frame(0.42, 0, 18, False),
+    ]
+
+    data = bytearray(b"GIF89a")
+    data.extend(width.to_bytes(2, "little"))
+    data.extend(height.to_bytes(2, "little"))
+    data.extend(bytes([0b11110111, 0, 0]))
+    for r, g, b in palette:
+        data.extend(bytes([r, g, b]))
+    for pixels in frames:
+        data.extend(b"\x21\xF9\x04")
+        data.extend(bytes([0x04]))
+        data.extend((80).to_bytes(2, "little"))
+        data.extend(b"\x00\x00")
+        data.extend(b"\x2C")
+        data.extend((0).to_bytes(2, "little") * 2)
+        data.extend(width.to_bytes(2, "little"))
+        data.extend(height.to_bytes(2, "little"))
+        data.extend(b"\x00")
+        data.extend(gif_lzw_data(pixels))
+    data.extend(b"\x3B")
+    return bytes(data)
+
+
 def generate_markdown(summary: dict) -> str:
     hw = {run["run_id"]: run for run in summary["hardware_runs"]}
     gpu = hw["hitl_gpu_resource_max_thermal55"]["summary"]
     mem = hw["hitl_resource_max_memory"]["summary"]
+    recovery = hw["hitl_vlm_defer_recovery"]["summary"]
     output = [
         "# TALOS Metrics Report",
         "",
@@ -264,6 +470,7 @@ def generate_markdown(summary: dict) -> str:
         "| --- | --- | --- |",
         f"| GPU thermal gate | `GR3D_FREQ={gpu['peak_gpu_utilization_percent']:.0f}%`, peak temp `{gpu['peak_temperature_c']:.3f}C` | `vlm_thermal_pressure_deferrals={gpu['vlm_thermal_pressure_deferrals']}` while `executed={gpu['executed']}` |",
         f"| RAM/queue pressure | peak memory `{mem['peak_memory_percent']:.3f}%`, max queue pressure `{mem['max_queue_pressure']}` | `vlm_memory_pressure_decisions={mem['vlm_memory_pressure_decisions']}` while `executed={mem['executed']}` |",
+        f"| VLM recovery | peak temp `{recovery['peak_temperature_c']:.3f}C`, `vlm_deferred={recovery['vlm_deferred']}` | `vlm_replayed={recovery['vlm_replayed']}/{recovery['vlm_deferred']}`, `rejected={recovery['rejected']}` |",
         "",
         "## Local JSONL Runs",
         "",
@@ -305,11 +512,15 @@ def main() -> None:
     summary = build_summary()
     hardware_runs = summary["hardware_runs"]
     gpu_run = next(run for run in hardware_runs if run["run_id"] == "hitl_gpu_resource_max_thermal55")
+    recovery_run = next(run for run in hardware_runs if run["run_id"] == "hitl_vlm_defer_recovery")
 
     write(ASSET_DIR / "talos_architecture.svg", generate_architecture_svg())
     write(ASSET_DIR / "admission_policy.svg", generate_policy_svg())
     write(ASSET_DIR / "hardware_summary.svg", generate_bar_svg(hardware_runs))
     write(ASSET_DIR / "hitl_thermal_timeline.svg", generate_timeline_svg(gpu_run))
+    write(ASSET_DIR / "hitl_defer_recovery_timeline.svg", generate_recovery_timeline_svg(recovery_run))
+    write(ASSET_DIR / "talos_recovery_storyboard.svg", generate_recovery_storyboard_svg(recovery_run))
+    write_bytes(ASSET_DIR / "talos_defer_recovery.gif", generate_recovery_gif(recovery_run))
     write(DOCS_DIR / "metrics_summary.json", json.dumps(summary, indent=2))
     write(DOCS_DIR / "metrics_report.md", generate_markdown(summary))
     print(f"generated {ASSET_DIR.relative_to(ROOT)} and {DOCS_DIR / 'metrics_report.md'}")

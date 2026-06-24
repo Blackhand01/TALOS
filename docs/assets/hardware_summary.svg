@@ -1,21 +1,24 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="980" height="420" viewBox="0 0 980 420" role="img">
+<svg xmlns="http://www.w3.org/2000/svg" width="1080" height="420" viewBox="0 0 1080 420" role="img">
 <style>
 text{font-family:Inter,Arial,sans-serif;fill:#17202a} .small{font-size:13px}.label{font-size:15px;font-weight:600}.title{font-size:22px;font-weight:700}.muted{fill:#5d6d7e}.box{fill:#f8fafc;stroke:#ccd6e0;stroke-width:1.5}.green{fill:#1f9d55}.red{fill:#c0392b}.blue{fill:#2471a3}.amber{fill:#d68910}.purple{fill:#6c5ce7}.line{stroke:#2c3e50;stroke-width:2;fill:none}.grid{stroke:#edf2f7;stroke-width:1}
 </style>
-<rect width="980" height="420" fill="#ffffff"/>
+<rect width="1080" height="420" fill="#ffffff"/>
 <text x="40" y="48" class="title">Hardware validation summary</text>
 <text x="40" y="75" class="small muted">Real Orin Nano telemetry from HITL runs pasted from terminal.</text>
-<rect x="70" y="82.2" width="120" height="217.8" rx="5" fill="#2471a3"/>
-<text x="130" y="326" text-anchor="middle" class="label">99</text>
-<text x="130" y="355" text-anchor="middle" class="small muted">GPU load</text>
-<rect x="290" y="162.5" width="120" height="137.5" rx="5" fill="#c0392b"/>
-<text x="350" y="326" text-anchor="middle" class="label">5</text>
-<text x="350" y="355" text-anchor="middle" class="small muted">Thermal VLM deferrals</text>
-<rect x="510" y="117.5" width="120" height="182.5" rx="5" fill="#d68910"/>
-<text x="570" y="326" text-anchor="middle" class="label">82.948</text>
-<text x="570" y="355" text-anchor="middle" class="small muted">Memory pressure</text>
-<rect x="730" y="115.2" width="120" height="184.8" rx="5" fill="#6c5ce7"/>
-<text x="790" y="326" text-anchor="middle" class="label">21</text>
-<text x="790" y="355" text-anchor="middle" class="small muted">Memory-gated VLM</text>
-<line x1="45" y1="300" x2="930" y2="300" stroke="#d8dee6"/>
+<rect x="70" y="82.2" width="105" height="217.8" rx="5" fill="#2471a3"/>
+<text x="122" y="326" text-anchor="middle" class="label">99</text>
+<text x="122" y="355" text-anchor="middle" class="small muted">GPU load</text>
+<rect x="260" y="162.5" width="105" height="137.5" rx="5" fill="#c0392b"/>
+<text x="312" y="326" text-anchor="middle" class="label">5</text>
+<text x="312" y="355" text-anchor="middle" class="small muted">Thermal VLM deferrals</text>
+<rect x="450" y="117.5" width="105" height="182.5" rx="5" fill="#d68910"/>
+<text x="502" y="326" text-anchor="middle" class="label">82.948</text>
+<text x="502" y="355" text-anchor="middle" class="small muted">Memory pressure</text>
+<rect x="640" y="115.2" width="105" height="184.8" rx="5" fill="#6c5ce7"/>
+<text x="692" y="326" text-anchor="middle" class="label">21</text>
+<text x="692" y="355" text-anchor="middle" class="small muted">Memory-gated VLM</text>
+<rect x="830" y="80.0" width="105" height="220.0" rx="5" fill="#1f9d55"/>
+<text x="882" y="326" text-anchor="middle" class="label">36</text>
+<text x="882" y="355" text-anchor="middle" class="small muted">Replay success</text>
+<line x1="45" y1="300" x2="1030" y2="300" stroke="#d8dee6"/>
 </svg>

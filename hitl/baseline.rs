@@ -28,6 +28,7 @@ struct Args {
     stop_temp_c: Option<f32>,
     memory_pressure_mb: usize,
     vlm_temperature_gate_c: Option<f32>,
+    drain_deferred: bool,
     log_jsonl: PathBuf,
     log_csv: Option<PathBuf>,
 }
@@ -147,6 +148,9 @@ struct HitlStats {
     vlm_admitted: usize,
     vlm_deferred: usize,
     vlm_rejected: usize,
+    deferred_replayed: usize,
+    vlm_replayed: usize,
+    deferred_recovery_high_load_overrides: usize,
     vlm_thermal_pressure_deferrals: usize,
     vlm_memory_pressure_decisions: usize,
     peak_memory_percent: f32,
@@ -230,6 +234,10 @@ impl Drop for CpuBurners {
     }
 }
 
+impl CpuBurners {
+    fn stop(self) {}
+}
+
 impl CpuBurnThreads {
     fn parse(value: &str) -> Result<Self, Box<dyn std::error::Error>> {
         match value {
@@ -270,6 +278,7 @@ fn parse_args() -> Result<Args, Box<dyn std::error::Error>> {
     let mut stop_temp_c = workload.default_stop_temp_c();
     let mut memory_pressure_mb = workload.default_memory_pressure_mb();
     let mut vlm_temperature_gate_c = None;
+    let mut drain_deferred = false;
     let mut log_jsonl = PathBuf::from("logs/hitl-orinnano-baseline.jsonl");
     let mut log_csv = Some(PathBuf::from("logs/hitl-orinnano-baseline.csv"));
     let mut log_overridden = false;
@@ -293,8 +302,8 @@ fn parse_args() -> Result<Args, Box<dyn std::error::Error>> {
             }
             "--workload" => {
                 let value = args.next().ok_or("--workload requires a mode")?;
-                workload =
-                    HitlWorkload::parse(&value).ok_or("workload must be baseline or heavy")?;
+                workload = HitlWorkload::parse(&value)
+                    .ok_or("workload must be baseline, heavy, or thermal")?;
                 if !sample_period_overridden {
                     sample_period_ms = workload.default_sample_period_ms();
                 }
@@ -403,6 +412,12 @@ fn parse_args() -> Result<Args, Box<dyn std::error::Error>> {
                     .ok_or("--vlm-temperature-gate-c requires a value")?;
                 vlm_temperature_gate_c = Some(value.parse()?);
             }
+            "--drain-deferred" => {
+                drain_deferred = true;
+            }
+            "--no-drain-deferred" => {
+                drain_deferred = false;
+            }
             "--log-jsonl" => {
                 let value = args.next().ok_or("--log-jsonl requires a path")?;
                 log_jsonl = PathBuf::from(value);
@@ -419,7 +434,7 @@ fn parse_args() -> Result<Args, Box<dyn std::error::Error>> {
             }
             "--help" | "-h" => {
                 println!(
-                    "Usage: talos_hitl [--workload baseline|heavy|thermal] [--tasks N] [--duration-secs N|--no-duration-limit] [--progress-every N] [--cpu-burn-threads none|auto|N] [--target-temp-c C|--no-target-temp] [--stop-temp-c C|--no-stop-temp] [--memory-pressure-mb N] [--vlm-temperature-gate-c C] [--telemetry sysfs|tegrastats|jtop] [--sample-ms N] [--inter-task-ms N] [--payload-bytes N] [--log-jsonl PATH] [--log-csv PATH] [--no-csv]"
+                    "Usage: talos_hitl [--workload baseline|heavy|thermal] [--tasks N] [--duration-secs N|--no-duration-limit] [--progress-every N] [--cpu-burn-threads none|auto|N] [--target-temp-c C|--no-target-temp] [--stop-temp-c C|--no-stop-temp] [--memory-pressure-mb N] [--vlm-temperature-gate-c C] [--drain-deferred|--no-drain-deferred] [--telemetry sysfs|tegrastats|jtop] [--sample-ms N] [--inter-task-ms N] [--payload-bytes N] [--log-jsonl PATH] [--log-csv PATH] [--no-csv]"
                 );
                 std::process::exit(0);
             }
@@ -441,6 +456,7 @@ fn parse_args() -> Result<Args, Box<dyn std::error::Error>> {
         stop_temp_c,
         memory_pressure_mb,
         vlm_temperature_gate_c,
+        drain_deferred,
         log_jsonl,
         log_csv,
     })
@@ -467,7 +483,7 @@ async fn run_hitl_baseline(args: Args) -> Result<(), Box<dyn std::error::Error>>
         None
     };
     let burn_thread_count = args.cpu_burn_threads.resolve();
-    let _cpu_burners = if burn_thread_count > 0 {
+    let mut cpu_burners = if burn_thread_count > 0 {
         println!("cpu_burn_threads={burn_thread_count}");
         Some(spawn_cpu_burners(burn_thread_count))
     } else {
@@ -475,9 +491,10 @@ async fn run_hitl_baseline(args: Args) -> Result<(), Box<dyn std::error::Error>>
     };
     let started = Instant::now();
     let mut target_temp_reported = false;
+    let mut recovery_cooling_reported = false;
 
     println!(
-        "profile={} mode={} telemetry={} sample_ms={} payload_bytes={} duration_secs={} target_temp_c={} stop_temp_c={} memory_pressure_mb={} vlm_temperature_gate_c={}",
+        "profile={} mode={} telemetry={} sample_ms={} payload_bytes={} duration_secs={} target_temp_c={} stop_temp_c={} memory_pressure_mb={} vlm_temperature_gate_c={} drain_deferred={}",
         ExecutionProfile::Hitl.name(),
         args.workload.name(),
         args.telemetry_source.name(),
@@ -489,10 +506,13 @@ async fn run_hitl_baseline(args: Args) -> Result<(), Box<dyn std::error::Error>>
         optional_f32_text(args.target_temp_c),
         optional_f32_text(args.stop_temp_c),
         args.memory_pressure_mb,
-        optional_f32_text(args.vlm_temperature_gate_c)
+        optional_f32_text(args.vlm_temperature_gate_c),
+        args.drain_deferred
     );
 
-    for index in 0..args.tasks {
+    let mut next_task_index = 0usize;
+
+    while next_task_index < args.tasks || (args.drain_deferred && !scheduler.is_empty()) {
         if let Some(duration_secs) = args.duration_secs {
             if started.elapsed() >= Duration::from_secs(duration_secs) {
                 println!(
@@ -504,6 +524,28 @@ async fn run_hitl_baseline(args: Args) -> Result<(), Box<dyn std::error::Error>>
             }
         }
 
+        if args.drain_deferred
+            && next_task_index >= args.tasks
+            && !scheduler.is_empty()
+            && !recovery_cooling_reported
+        {
+            recovery_cooling_reported = true;
+            if let Some(burners) = cpu_burners.take() {
+                burners.stop();
+                println!(
+                    "recovery_cooling_started elapsed_ms={} queued_tasks={} reason=task_stream_complete",
+                    started.elapsed().as_millis(),
+                    scheduler.len()
+                );
+            } else {
+                println!(
+                    "recovery_cooling_started elapsed_ms={} queued_tasks={} reason=task_stream_complete_no_burners",
+                    started.elapsed().as_millis(),
+                    scheduler.len()
+                );
+            }
+        }
+
         let sample = telemetry_monitor.tick_sample().await;
         if !sample.valid {
             eprintln!(
@@ -512,7 +554,6 @@ async fn run_hitl_baseline(args: Args) -> Result<(), Box<dyn std::error::Error>>
             );
         }
 
-        let task = hitl_task(index, args.workload, args.payload_bytes);
         let telemetry = sample.telemetry;
         let queue_pressure = scheduler.queue_pressure();
         let state = state_machine.evaluate(&telemetry, queue_pressure);
@@ -541,126 +582,53 @@ async fn run_hitl_baseline(args: Args) -> Result<(), Box<dyn std::error::Error>>
             }
         }
 
-        let vlm_gate = if task.task_type == TaskType::VLM_QUERY {
-            Some(admission.vlm_gate_decision(
-                &task,
-                &telemetry,
-                state,
-                lease_manager.is_active(),
-                scheduler.cv_burst_active(),
-            ))
+        let replay_deferred = args.drain_deferred
+            && !scheduler.is_empty()
+            && telemetry.temperature_c < admission.vlm_temperature_gate_c
+            && telemetry.memory_usage_percent < admission.vlm_memory_gate_percent;
+        let task = if replay_deferred {
+            scheduler.pop_next().expect("checked non-empty scheduler")
         } else {
-            None
-        };
-        let vlm_metadata = admission.vlm_profile.runtime_metadata();
-        let decision = admission.decide(
-            &task,
-            &telemetry,
-            state,
-            lease_manager.is_active(),
-            scheduler.cv_burst_active(),
-        );
-        stats.observe_decision(task.task_type, decision.status, vlm_gate);
-
-        match decision.status {
-            DecisionStatus::ADMIT => {
-                stats.admitted += 1;
-                if let Some(lease) = lease_manager.try_acquire() {
-                    let lease_id = lease.id.to_string();
-                    let task_type = task.task_type;
-                    let task_id = task.task_id;
-                    let pool_slot_id = task.pool_slot_id;
-                    let execution_started = Instant::now();
-                    let result = {
-                        let _lease = lease;
-                        dispatch_to_cpp(task).await?
-                    };
-                    let execution_time_ms = elapsed_execution_ms(execution_started);
-                    let change_result = if task_type == TaskType::CHANGE_DETECTION && result.ok {
-                        Some(change_detector.evaluate(FeatureEmbedding::from(&result)))
-                    } else {
-                        None
-                    };
-                    let vlm_runtime = if task_type == TaskType::VLM_QUERY && result.ok {
-                        Some((
-                            vlm_metadata,
-                            result.vlm_output_tokens,
-                            result.vlm_confidence,
-                            result.vlm_answer_code,
-                        ))
-                    } else {
-                        None
-                    };
-
-                    stats.executed += 1;
-                    stats.execution_times_ms.push(execution_time_ms);
-                    stats.runtime_latencies_ms.push(result.latency_ms);
-
-                    logger.record(&execution_observation(
-                        task_id,
-                        task_type,
-                        queue_pressure,
-                        state,
-                        sample.source,
-                        sample.valid,
-                        telemetry,
-                        Some(lease_id),
-                        pool_slot_id,
-                        execution_time_ms,
-                        &result,
-                        change_result,
-                        vlm_gate,
-                        vlm_runtime,
-                    ))?;
-                } else {
-                    stats.deferred += 1;
-                    record_decision(
-                        &mut logger,
-                        &task,
-                        DecisionStatus::DEFER,
-                        queue_pressure,
-                        state,
-                        sample.source,
-                        sample.valid,
-                        telemetry,
-                        vlm_gate,
-                        vlm_metadata,
-                    )?;
-                    scheduler.defer(task);
+            if next_task_index >= args.tasks {
+                if args.duration_secs.is_none() {
+                    break;
                 }
+                tokio::time::sleep(Duration::from_millis(args.sample_period_ms)).await;
+                continue;
             }
-            DecisionStatus::DEFER => {
-                stats.deferred += 1;
-                record_decision(
-                    &mut logger,
-                    &task,
-                    DecisionStatus::DEFER,
-                    queue_pressure,
-                    state,
-                    sample.source,
-                    sample.valid,
-                    telemetry,
-                    vlm_gate,
-                    vlm_metadata,
-                )?;
-                scheduler.defer(task);
-            }
-            DecisionStatus::REJECT => {
-                stats.rejected += 1;
-                record_decision(
-                    &mut logger,
-                    &task,
-                    DecisionStatus::REJECT,
-                    queue_pressure,
-                    state,
-                    sample.source,
-                    sample.valid,
-                    telemetry,
-                    vlm_gate,
-                    vlm_metadata,
-                )?;
-            }
+            let task = hitl_task(next_task_index, args.workload, args.payload_bytes);
+            next_task_index += 1;
+            task
+        };
+        let replayed_deferred = replay_deferred;
+        let queue_pressure = scheduler.queue_pressure();
+        let mut decision_state = state_machine.evaluate(&telemetry, queue_pressure);
+        if replayed_deferred
+            && task.task_type == TaskType::VLM_QUERY
+            && decision_state == SchedulerState::HIGH_LOAD
+            && telemetry.temperature_c < admission.vlm_temperature_gate_c
+            && telemetry.memory_usage_percent < admission.vlm_memory_gate_percent
+        {
+            decision_state = SchedulerState::NORMAL;
+            stats.deferred_recovery_high_load_overrides += 1;
         }
+
+        process_hitl_task(
+            task,
+            &admission,
+            &lease_manager,
+            &mut change_detector,
+            &mut scheduler,
+            &mut logger,
+            &mut stats,
+            queue_pressure,
+            decision_state,
+            sample.source,
+            sample.valid,
+            telemetry,
+            replayed_deferred,
+        )
+        .await?;
 
         if args.inter_task_delay_ms > 0 {
             tokio::time::sleep(Duration::from_millis(args.inter_task_delay_ms)).await;
@@ -669,7 +637,7 @@ async fn run_hitl_baseline(args: Args) -> Result<(), Box<dyn std::error::Error>>
         let completed = stats.executed + stats.deferred + stats.rejected;
         if args.progress_every > 0 && completed % args.progress_every == 0 {
             println!(
-                "progress completed={} task_limit={} elapsed_ms={} temp_c={:.3} peak_temp_c={:.3} mem_percent={:.3} executed={} vlm_deferred={} vlm_thermal_deferrals={} vlm_memory_pressure_decisions={}",
+                "progress completed={} task_limit={} elapsed_ms={} temp_c={:.3} peak_temp_c={:.3} mem_percent={:.3} executed={} vlm_deferred={} deferred_replayed={} vlm_replayed={} vlm_thermal_deferrals={} vlm_memory_pressure_decisions={}",
                 completed,
                 args.tasks,
                 started.elapsed().as_millis(),
@@ -678,6 +646,8 @@ async fn run_hitl_baseline(args: Args) -> Result<(), Box<dyn std::error::Error>>
                 stats.peak_memory_percent,
                 stats.executed,
                 stats.vlm_deferred,
+                stats.deferred_replayed,
+                stats.vlm_replayed,
                 stats.vlm_thermal_pressure_deferrals,
                 stats.vlm_memory_pressure_decisions
             );
@@ -685,6 +655,152 @@ async fn run_hitl_baseline(args: Args) -> Result<(), Box<dyn std::error::Error>>
     }
 
     print_summary(args.tasks, started.elapsed(), &args, &stats);
+    Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn process_hitl_task(
+    task: TaskRequest,
+    admission: &AdmissionController,
+    lease_manager: &GpuLeaseManager,
+    change_detector: &mut ChangeDetector,
+    scheduler: &mut TaskScheduler,
+    logger: &mut ObservabilityLogger,
+    stats: &mut HitlStats,
+    queue_pressure: u32,
+    state: SchedulerState,
+    telemetry_source: TelemetrySource,
+    telemetry_valid: bool,
+    telemetry: SystemTelemetry,
+    replayed_deferred: bool,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let vlm_gate = if task.task_type == TaskType::VLM_QUERY {
+        Some(admission.vlm_gate_decision(
+            &task,
+            &telemetry,
+            state,
+            lease_manager.is_active(),
+            scheduler.cv_burst_active(),
+        ))
+    } else {
+        None
+    };
+    let vlm_metadata = admission.vlm_profile.runtime_metadata();
+    let decision = admission.decide(
+        &task,
+        &telemetry,
+        state,
+        lease_manager.is_active(),
+        scheduler.cv_burst_active(),
+    );
+    stats.observe_decision(task.task_type, decision.status, vlm_gate);
+
+    match decision.status {
+        DecisionStatus::ADMIT => {
+            stats.admitted += 1;
+            if replayed_deferred {
+                stats.deferred_replayed += 1;
+                if task.task_type == TaskType::VLM_QUERY {
+                    stats.vlm_replayed += 1;
+                }
+            }
+            if let Some(lease) = lease_manager.try_acquire() {
+                let lease_id = lease.id.to_string();
+                let task_type = task.task_type;
+                let task_id = task.task_id;
+                let pool_slot_id = task.pool_slot_id;
+                let execution_started = Instant::now();
+                let result = {
+                    let _lease = lease;
+                    dispatch_to_cpp(task).await?
+                };
+                let execution_time_ms = elapsed_execution_ms(execution_started);
+                let change_result = if task_type == TaskType::CHANGE_DETECTION && result.ok {
+                    Some(change_detector.evaluate(FeatureEmbedding::from(&result)))
+                } else {
+                    None
+                };
+                let vlm_runtime = if task_type == TaskType::VLM_QUERY && result.ok {
+                    Some((
+                        vlm_metadata,
+                        result.vlm_output_tokens,
+                        result.vlm_confidence,
+                        result.vlm_answer_code,
+                    ))
+                } else {
+                    None
+                };
+
+                stats.executed += 1;
+                stats.execution_times_ms.push(execution_time_ms);
+                stats.runtime_latencies_ms.push(result.latency_ms);
+
+                logger.record(&execution_observation(
+                    task_id,
+                    task_type,
+                    queue_pressure,
+                    state,
+                    telemetry_source,
+                    telemetry_valid,
+                    telemetry,
+                    Some(lease_id),
+                    pool_slot_id,
+                    execution_time_ms,
+                    &result,
+                    change_result,
+                    vlm_gate,
+                    vlm_runtime,
+                ))?;
+            } else {
+                stats.deferred += 1;
+                record_decision(
+                    logger,
+                    &task,
+                    DecisionStatus::DEFER,
+                    queue_pressure,
+                    state,
+                    telemetry_source,
+                    telemetry_valid,
+                    telemetry,
+                    vlm_gate,
+                    vlm_metadata,
+                )?;
+                scheduler.defer(task);
+            }
+        }
+        DecisionStatus::DEFER => {
+            stats.deferred += 1;
+            record_decision(
+                logger,
+                &task,
+                DecisionStatus::DEFER,
+                queue_pressure,
+                state,
+                telemetry_source,
+                telemetry_valid,
+                telemetry,
+                vlm_gate,
+                vlm_metadata,
+            )?;
+            scheduler.defer(task);
+        }
+        DecisionStatus::REJECT => {
+            stats.rejected += 1;
+            record_decision(
+                logger,
+                &task,
+                DecisionStatus::REJECT,
+                queue_pressure,
+                state,
+                telemetry_source,
+                telemetry_valid,
+                telemetry,
+                vlm_gate,
+                vlm_metadata,
+            )?;
+        }
+    }
+
     Ok(())
 }
 
@@ -965,6 +1081,7 @@ fn print_summary(tasks: usize, elapsed: Duration, args: &Args, stats: &HitlStats
         "vlm_temperature_gate_c={}",
         optional_f32_text(args.vlm_temperature_gate_c)
     );
+    println!("drain_deferred={}", args.drain_deferred);
     println!("elapsed_ms={elapsed_ms}");
     println!(
         "admitted={} deferred={} rejected={} executed={}",
@@ -985,6 +1102,10 @@ fn print_summary(tasks: usize, elapsed: Duration, args: &Args, stats: &HitlStats
         stats.vlm_rejected,
         stats.vlm_thermal_pressure_deferrals,
         stats.vlm_memory_pressure_decisions
+    );
+    println!(
+        "deferred_replayed={} vlm_replayed={} deferred_recovery_high_load_overrides={}",
+        stats.deferred_replayed, stats.vlm_replayed, stats.deferred_recovery_high_load_overrides
     );
     println!(
         "execution_time_ms_p50={} execution_time_ms_p95={}",

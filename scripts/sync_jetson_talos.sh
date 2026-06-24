@@ -11,16 +11,17 @@ FILES=(
   Cargo.toml
   Makefile
   README.md
-  blueprint.md
   build.rs
   configs
   core
   deployment
+  docs
   edge_node
   evaluation
   hitl
   ipc
   real_model
+  reports
   runtime
   scripts
   tools
