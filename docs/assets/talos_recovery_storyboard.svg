@@ -4,7 +4,7 @@ text{font-family:Inter,Arial,sans-serif;fill:#17202a} .small{font-size:13px}.lab
 </style>
 <rect width="980" height="520" fill="#ffffff"/>
 <text x="40" y="48" class="title">Mission story: protect CV, postpone VLM, recover later</text>
-<text x="40" y="75" class="small muted">This is the recruiter-readable point of TALOS: graceful degradation instead of uncontrolled contention.</text>
+<text x="40" y="75" class="small muted">Deferred VLM work is replayed after thermal recovery instead of running during constrained conditions.</text>
 <rect x="45" y="132" width="205" height="210" rx="8" fill="#eef7ff" stroke="#ccd6e0" stroke-width="1.5"/>
 <text x="63" y="170" class="label">1. Nominal</text>
 <text x="63" y="205" class="small muted">CV / change / VLM are</text>

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Generate recruiter-facing TALOS metrics and SVG figures.
+"""Generate TALOS metrics and SVG figures.
 
 The script intentionally uses only the Python standard library so the report can
 be regenerated on a clean Jetson or laptop without installing plotting tools.
@@ -325,7 +325,7 @@ def generate_recovery_storyboard_svg(recovery_run: dict) -> str:
     parts = svg_header(980, 520)
     parts.append('<rect width="980" height="520" fill="#ffffff"/>')
     parts.append('<text x="40" y="48" class="title">Mission story: protect CV, postpone VLM, recover later</text>')
-    parts.append('<text x="40" y="75" class="small muted">This is the recruiter-readable point of TALOS: graceful degradation instead of uncontrolled contention.</text>')
+    parts.append('<text x="40" y="75" class="small muted">Deferred VLM work is replayed after thermal recovery instead of running during constrained conditions.</text>')
     cards = [
         ("1. Nominal", "CV / change / VLM are admitted while telemetry is healthy.", "temp < gate", "#eef7ff"),
         ("2. Thermal pressure", "Low-priority VLM is deferred; critical CV keeps running.", f"vlm_deferred={s['vlm_deferred']}", "#fff7e8"),
