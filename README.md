@@ -38,7 +38,7 @@ The Jetson HITL runs exercise the control plane against real device telemetry an
 
 VLM workloads can be deferred while thermal gates are active, then replayed after cooldown.
 
-![TALOS defer and recovery animation](docs/assets/talos_defer_recovery.gif)
+<!-- ![TALOS defer and recovery animation](docs/assets/talos_defer_recovery.gif) -->
 
 ![HITL defer recovery timeline](docs/assets/hitl_defer_recovery_timeline.svg)
 
@@ -100,15 +100,3 @@ make jetson-run-vlm-defer-recovery VLM_DEFER_TEMP_C=50
 - [`docs/README.md`](docs/README.md): architecture, Rust/C++ bridge, telemetry model, memory ownership, and validation boundaries.
 - [`docs/real_model_backends.md`](docs/real_model_backends.md): TensorRT, ONNX, and SmolVLM adapter paths.
 - [`docs/metrics_report.md`](docs/metrics_report.md): generated report from recorded run evidence.
-
-## Operational Notes
-
-The default Jetson target is:
-
-```text
-ste@192.168.55.1:/home/ste/TALOS
-```
-
-Override Jetson connection settings with `JETSON_USER`, `JETSON_ADDR`, and `JETSON_DIR`.
-
-HITL runs require compatible Jetson telemetry paths, SSH access from the host, Rust/Cargo, a C++ compiler, Python 3, and Jetson telemetry tooling.
